@@ -18,7 +18,9 @@ test.beforeAll(async () => {
     const color = ['#d5a58d', '#9186b9', '#709696', '#aaa073'][i % 4];
     const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="1800" height="1200"><defs><linearGradient id="sky" x2="0" y2="1"><stop stop-color="${color}"/><stop offset="1" stop-color="#37344b"/></linearGradient></defs><rect width="1800" height="1200" fill="url(#sky)"/><circle cx="${400 + (i % 4) * 260}" cy="${250 + (i % 3) * 70}" r="120" fill="#efdbb9"/><path d="M0 950L480 ${300 + (i % 3) * 120}L980 950L1400 410L1800 870V1200H0Z" fill="#4a4c64"/><path d="M0 950L500 800L880 ${490 + (i % 4) * 40}L1800 1120V1200H0Z" fill="#262d41"/><path d="M0 1080Q500 940 900 1080T1800 1000V1200H0Z" fill="#171f32"/></svg>`;
     const folder = i < 4 ? library : i < 24 ? path.join(library, 'Landscapes') : path.join(library, 'Landscapes', 'Mountains');
-    await sharp(Buffer.from(svg)).jpeg({ quality: 80 }).toFile(path.join(folder, `${names[i % 10]} ${String(i).padStart(2, '0')}.jpg`));
+    const image = sharp(Buffer.from(svg));
+    if (i === 30) image.resize(1200, 1800); // A portrait for navigation across different aspect ratios.
+    await image.jpeg({ quality: 80 }).toFile(path.join(folder, `${names[i % 10]} ${String(i).padStart(2, '0')}.jpg`));
   }
   const tile = await sharp({ create: { width: 60, height: 40, channels: 4, background: '#564279' } }).png().toBuffer();
   await Promise.all(Array.from({ length: 1600 }, (_, i) => fs.writeFile(path.join(library, 'Textures', `Texture ${String(i).padStart(4, '0')}.png`), tile)));
@@ -152,6 +154,98 @@ test('original image fit, 1:1, smooth wheel zoom, navigation, and details', asyn
   await page.locator('.image-card').first().click();
   await expect(page.getByRole('button', { name: 'Nearest neighbor', exact: true })).toHaveAttribute('aria-pressed', 'true');
   await page.keyboard.press('n');
+  await page.keyboard.press('Escape');
+});
+
+test('image navigation retains the original through decoding and skips stale loads without blank frames', async () => {
+  await page.locator('.tree-label').filter({ hasText: 'Landscapes' }).click();
+  await page.locator('.image-card').first().click();
+  const visibleImage = page.locator('.original-image:visible');
+  await expect(visibleImage).toHaveCount(1);
+  const firstSource = await visibleImage.getAttribute('src');
+  await page.evaluate(() => {
+    const originalDecode = HTMLImageElement.prototype.decode;
+    const first = document.querySelector<HTMLImageElement>('.original-image')!;
+    const gates = new Map<string, { resolve: () => void; reject: (error: Error) => void }>();
+    const toolbar = document.querySelector('.zoom-toolbar')!.getBoundingClientRect();
+    const samples = { frames: 0, blank: 0, translucent: 0, toolbarShift: 0 };
+    let frame = 0;
+    HTMLImageElement.prototype.decode = async function () {
+      await originalDecode.call(this);
+      if (this.src.startsWith('lumen://image/') && this.src !== first.src) {
+        await new Promise<void>((resolve, reject) => { gates.set(this.src, { resolve, reject }); });
+      }
+    };
+    const sample = () => {
+      const stage = document.querySelector('.viewer-stage')!.getBoundingClientRect();
+      const images = [...document.querySelectorAll<HTMLImageElement>('.original-image')].filter(image => {
+        const box = image.getBoundingClientRect();
+        return image.checkVisibility() && image.complete && image.naturalWidth > 0
+          && box.right > stage.left && box.left < stage.right && box.bottom > stage.top && box.top < stage.bottom;
+      });
+      samples.frames++;
+      const currentToolbar = document.querySelector('.zoom-toolbar')!.getBoundingClientRect();
+      samples.toolbarShift = Math.max(samples.toolbarShift,
+        ...(['x', 'y', 'width', 'height'] as const).map(key => Math.abs(currentToolbar[key] - toolbar[key])));
+      if (!images.length) samples.blank++;
+      if (images.some(image => getComputedStyle(image).opacity !== '1')) samples.translucent++;
+      frame = requestAnimationFrame(sample);
+    };
+    frame = requestAnimationFrame(sample);
+    Object.assign(window, { navigationProbe: { gates, samples, first, stop: () => {
+      cancelAnimationFrame(frame);
+      HTMLImageElement.prototype.decode = originalDecode;
+    } } });
+  });
+  // Hold decoding long enough to observe the previously fitted image across frames.
+  await page.getByRole('button', { name: 'Next image', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).navigationProbe.gates.size)).toBe(1);
+  const secondSource = await page.locator('.original-image').last().getAttribute('src');
+  await expect(visibleImage).toHaveAttribute('src', firstSource!);
+  expect(await visibleImage.evaluate(image => image === (window as any).navigationProbe.first)).toBe(true);
+  // Skip the pending image, then simulate its decode failing after it was unmounted.
+  await page.keyboard.press('ArrowRight');
+  await expect.poll(() => page.evaluate(() => (window as any).navigationProbe.gates.size)).toBe(2);
+  const thirdSource = await page.locator('.original-image').last().getAttribute('src');
+  await page.evaluate(source => {
+    const gates = (window as any).navigationProbe.gates;
+    gates.get(source).reject(new Error('Stale decode'));
+    gates.delete(source);
+  }, secondSource);
+  await expect(visibleImage).toHaveAttribute('src', firstSource!);
+  await expect(page.locator('.viewer-error')).toHaveCount(0);
+  await page.evaluate(source => {
+    const gates = (window as any).navigationProbe.gates;
+    gates.get(source).resolve(); gates.delete(source);
+  }, thirdSource);
+  await expect(visibleImage).toHaveAttribute('src', thirdSource!);
+  await expect(page.locator('.original-image')).toHaveCount(1);
+  await expect(visibleImage).toHaveJSProperty('naturalWidth', 1200);
+  const fittedBox = await visibleImage.boundingBox(), stageBox = await page.locator('.viewer-stage').boundingBox();
+  expect(fittedBox!.height).toBeCloseTo(stageBox!.height - 80, 0);
+  expect(fittedBox!.x + fittedBox!.width / 2).toBeCloseTo(stageBox!.x + stageBox!.width / 2, 0);
+  expect(Number((await page.locator('.zoom-value').innerText()).replace('%', ''))).toBeLessThan(100);
+  // Previous navigation and a cached image use the same seamless handoff.
+  await page.getByRole('button', { name: 'Previous image', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).navigationProbe.gates.size)).toBe(1);
+  await expect(visibleImage).toHaveAttribute('src', thirdSource!);
+  await page.evaluate(source => {
+    const gates = (window as any).navigationProbe.gates;
+    gates.get(source).resolve(); gates.delete(source);
+  }, secondSource);
+  await expect(visibleImage).toHaveAttribute('src', secondSource!);
+  await page.keyboard.press('ArrowLeft');
+  await expect(visibleImage).toHaveAttribute('src', firstSource!);
+  const samples = await page.evaluate(async () => {
+    await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+    const probe = (window as any).navigationProbe;
+    probe.stop(); delete (window as any).navigationProbe;
+    return probe.samples;
+  });
+  expect(samples.frames).toBeGreaterThan(5);
+  expect(samples.blank).toBe(0);
+  expect(samples.translucent).toBe(0);
+  expect(samples.toolbarShift).toBeLessThan(0.5);
   await page.keyboard.press('Escape');
 });
 

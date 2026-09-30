@@ -1,7 +1,48 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { TransformWrapper, TransformComponent, type ReactZoomPanPinchRef } from 'react-zoom-pan-pinch';
 import { ArrowLeft, ChevronLeft, ChevronRight, Copy, FolderOpen, Maximize, Minimize, Minus, Plus, Scan, ImageOff, Info, X, Grid2X2 } from 'lucide-react';
 import { original, bytes, type ImageItem, type Metadata } from './types';
+
+type Dimensions = { width: number; height: number };
+
+function ImageLayer({ item, visible, interactive, nearestNeighbor, onReady, onFailure, onScale }: {
+  item: ImageItem; visible: boolean; interactive: boolean; nearestNeighbor: boolean;
+  onReady: (item: ImageItem, dimensions: Dimensions, transform: ReactZoomPanPinchRef) => void;
+  onFailure: (id: string) => void; onScale: (id: string, scale: number) => void;
+}) {
+  const layer = useRef<HTMLDivElement>(null), transform = useRef<ReactZoomPanPinchRef>(null);
+  const [dimensions, setDimensions] = useState<Dimensions | null>(null), [scale, setScale] = useState(1);
+  const fitScale = dimensions && layer.current
+    ? Math.min((layer.current.clientWidth - 80) / dimensions.width, (layer.current.clientHeight - 80) / dimensions.height, 1) : 1;
+  const nearestRendering = CSS.supports('image-rendering', 'crisp-edges') ? 'crisp-edges' : 'pixelated';
+  useLayoutEffect(() => {
+    if (!dimensions || !layer.current || !transform.current) return;
+    const scale = Math.min((layer.current.clientWidth - 80) / dimensions.width, (layer.current.clientHeight - 80) / dimensions.height, 1);
+    transform.current.setTransform((layer.current.clientWidth - dimensions.width * scale) / 2, (layer.current.clientHeight - dimensions.height * scale) / 2, scale, 0);
+    onReady(item, dimensions, transform.current);
+  }, [dimensions, item, onReady]);
+  return <div className="viewer-image-layer" ref={layer} aria-hidden={!visible}
+    style={{ visibility: visible ? 'visible' : 'hidden', pointerEvents: interactive ? 'auto' : 'none' }}>
+    <TransformWrapper ref={transform} initialScale={1} minScale={Math.min(0.01, fitScale / 2)} maxScale={16}
+      limitToBounds={false} centerZoomedOut={false}
+      // Smooth wheel mode multiplies step by deltaY (usually 100–120 px per tick).
+      // Scale the step with current zoom so a tick stays modest even on tiny/huge images.
+      wheel={{ step: scale * 0.001 }} doubleClick={{ mode: 'toggle', step: 1 }} keyboard={{ disabled: true }}
+      onTransform={(_ref, state) => { setScale(state.scale); onScale(item.id, state.scale); }}>
+      <TransformComponent wrapperClass="zoom-wrapper" contentClass="zoom-content">
+        <img className="original-image" src={original(item)} alt={item.name} draggable={false}
+          style={{ imageRendering: nearestNeighbor && scale > 1 ? nearestRendering : 'auto' }}
+          onLoad={async event => {
+            const image = event.currentTarget;
+            try {
+              await image.decode();
+              if (image.isConnected) setDimensions({ width: image.naturalWidth, height: image.naturalHeight });
+            } catch { if (image.isConnected) onFailure(item.id); }
+          }} onError={() => onFailure(item.id)} />
+      </TransformComponent>
+    </TransformWrapper>
+  </div>;
+}
 
 export default function Viewer({ item, index, count, onClose, onPrevious, onNext, onMessage }: {
   item: ImageItem; index: number; count: number; onClose: () => void; onPrevious: () => void; onNext: () => void; onMessage: (message: string) => void;
@@ -10,13 +51,26 @@ export default function Viewer({ item, index, count, onClose, onPrevious, onNext
   const stage = useRef<HTMLDivElement>(null);
   const currentId = useRef(item.id);
   currentId.current = item.id;
-  const [dimensions, setDimensions] = useState<{ width: number; height: number } | null>(null);
+  const [displayed, setDisplayed] = useState<{ item: ImageItem; dimensions: Dimensions } | null>(null);
+  const [failedId, setFailedId] = useState<string | null>(null);
+  const failed = failedId === item.id, ready = !failed && displayed?.item.id === item.id;
+  const dimensions = ready ? displayed.dimensions : null;
   const [metadata, setMetadata] = useState<Metadata | null>(null);
-  const [scale, setScale] = useState(1), [failed, setFailed] = useState(false), [ready, setReady] = useState(false);
+  const [scale, setScale] = useState(1);
   const [info, setInfo] = useState(false), [fullscreen, setFullscreen] = useState(false);
   const [nearestNeighbor, setNearestNeighbor] = useState(() => localStorage.getItem('lumen.nearestNeighbor') === 'true');
   useEffect(() => { localStorage.setItem('lumen.nearestNeighbor', String(nearestNeighbor)); }, [nearestNeighbor]);
-  const nearestRendering = CSS.supports('image-rendering', 'crisp-edges') ? 'crisp-edges' : 'pixelated';
+  const imageReady = useCallback((item: ImageItem, dimensions: Dimensions, controls: ReactZoomPanPinchRef) => {
+    if (item.id !== currentId.current) return;
+    transform.current = controls;
+    setFailedId(null);
+    setScale(controls.state.scale);
+    setDisplayed({ item, dimensions });
+  }, []);
+  const imageFailure = useCallback((id: string) => { if (id === currentId.current) setFailedId(id); }, []);
+  const imageScale = useCallback((id: string, scale: number) => { if (id === currentId.current) setScale(scale); }, []);
+  // Keep the fitted image mounted until its decoded replacement is ready to paint.
+  const layers = displayed && displayed.item.id !== item.id ? [displayed.item, item] : [item];
   const fitScale = useCallback(() => {
     if (!stage.current || !dimensions) return 1;
     return Math.min((stage.current.clientWidth - 80) / dimensions.width, (stage.current.clientHeight - 80) / dimensions.height, 1);
@@ -31,12 +85,11 @@ export default function Viewer({ item, index, count, onClose, onPrevious, onNext
     transform.current?.setTransform((stage.current.clientWidth - dimensions.width) / 2, (stage.current.clientHeight - dimensions.height) / 2, 1, 220);
   }, [dimensions]);
   useEffect(() => {
-    setReady(false); setFailed(false); setDimensions(null); setMetadata(null);
+    setMetadata(null);
     let alive = true;
     window.lumen.metadata(item.id).then(data => { if (alive) setMetadata(data); }).catch(() => {});
     return () => { alive = false; };
   }, [item.id]);
-  useEffect(() => { if (dimensions) { fit(0); setReady(true); } }, [dimensions, fit]);
   useEffect(() => {
     const observer = new ResizeObserver(() => { if (ready && Math.abs((transform.current?.state.scale || 1) - fitScale()) < 0.1) fit(0); });
     if (stage.current) observer.observe(stage.current);
@@ -47,15 +100,15 @@ export default function Viewer({ item, index, count, onClose, onPrevious, onNext
       if (event.key === 'Escape') { event.preventDefault(); onClose(); }
       else if (event.key === 'ArrowLeft') { event.preventDefault(); onPrevious(); }
       else if (event.key === 'ArrowRight') { event.preventDefault(); onNext(); }
-      else if (event.key === '+' || event.key === '=') transform.current?.zoomIn();
-      else if (event.key === '-') transform.current?.zoomOut();
+      else if (ready && (event.key === '+' || event.key === '=')) transform.current?.zoomIn();
+      else if (ready && event.key === '-') transform.current?.zoomOut();
       else if (event.key === '0' || event.key.toLowerCase() === 'f') fit();
       else if (event.key === '1') actual();
       else if (event.key.toLowerCase() === 'i') setInfo(value => !value);
       else if (event.key.toLowerCase() === 'n') setNearestNeighbor(value => !value);
     };
     document.addEventListener('keydown', keydown); return () => document.removeEventListener('keydown', keydown);
-  }, [onClose, onNext, onPrevious, fit, actual]);
+  }, [onClose, onNext, onPrevious, fit, actual, ready]);
   useEffect(() => {
     const previous = document.activeElement as HTMLElement;
     document.getElementById('viewer-close')?.focus();
@@ -78,20 +131,11 @@ export default function Viewer({ item, index, count, onClose, onPrevious, onNext
     </header>
     <div className="viewer-body">
       <div className="viewer-stage" ref={stage}>
-        {!ready && !failed && <div className="viewer-loading"><span className="spinner" />Loading original…</div>}
-        {failed ? <div className="viewer-error"><ImageOff size={40} /><h2>Unable to display this image</h2><p>The file may be damaged, removed, or use an unsupported codec.</p><button className="button" onClick={() => invoke(window.lumen.reveal(item.id))}><FolderOpen size={16} />Show in Explorer</button></div> :
-          <TransformWrapper key={item.id} ref={transform} initialScale={1} minScale={Math.min(0.01, fitScale() / 2)} maxScale={16}
-            limitToBounds={false} centerZoomedOut={false}
-            // Smooth wheel mode multiplies step by deltaY (usually 100–120 px per tick).
-            // Scale the step with current zoom so a tick stays modest even on tiny/huge images.
-            wheel={{ step: scale * 0.001 }} doubleClick={{ mode: 'toggle', step: 1 }}
-            keyboard={{ disabled: true }} onTransform={(_ref, state) => setScale(state.scale)}>
-            <TransformComponent wrapperClass="zoom-wrapper" contentClass="zoom-content">
-              <img className="original-image" src={original(item)} alt={item.name} draggable={false}
-                style={{ opacity: ready ? 1 : 0, imageRendering: nearestNeighbor && scale > 1 ? nearestRendering : 'auto' }} onLoad={event => setDimensions({ width: event.currentTarget.naturalWidth, height: event.currentTarget.naturalHeight })}
-                onError={() => setFailed(true)} />
-            </TransformComponent>
-          </TransformWrapper>}
+        {!displayed && !failed && <div className="viewer-loading"><span className="spinner" />Loading original…</div>}
+        {layers.map(layer => <ImageLayer key={layer.id} item={layer} visible={!failed && displayed?.item.id === layer.id}
+          interactive={ready && layer.id === item.id} nearestNeighbor={nearestNeighbor}
+          onReady={imageReady} onFailure={imageFailure} onScale={imageScale} />)}
+        {failed && <div className="viewer-error"><ImageOff size={40} /><h2>Unable to display this image</h2><p>The file may be damaged, removed, or use an unsupported codec.</p><button className="button" onClick={() => invoke(window.lumen.reveal(item.id))}><FolderOpen size={16} />Show in Explorer</button></div>}
         <button className="viewer-nav previous" aria-label="Previous image" title="Previous (←)" disabled={index === 0} onClick={onPrevious}><ChevronLeft size={26} /></button>
         <button className="viewer-nav next" aria-label="Next image" title="Next (→)" disabled={index === count - 1} onClick={onNext}><ChevronRight size={26} /></button>
       </div>
@@ -105,7 +149,7 @@ export default function Viewer({ item, index, count, onClose, onPrevious, onNext
         <button className="button" onClick={() => invoke(window.lumen.reveal(item.id))}><FolderOpen size={15} />Show in Explorer</button>
       </aside>}
     </div>
-    <footer className="viewer-footer"><span>{dimensions ? `${dimensions.width.toLocaleString()} × ${dimensions.height.toLocaleString()}` : 'Original image'}<i />{bytes(item.size)}</span>
+    <footer className="viewer-footer"><span className="viewer-summary">{dimensions ? `${dimensions.width.toLocaleString()} × ${dimensions.height.toLocaleString()}` : 'Original image'}<i />{bytes(item.size)}</span>
       <div className="zoom-toolbar"><button className="icon-button" title="Zoom out (-)" aria-label="Zoom out" disabled={!ready} onClick={() => transform.current?.zoomOut()}><Minus size={18} /></button>
         <span className="zoom-value">{Math.round(scale * 100)}%</span>
         <button className="icon-button" title="Zoom in (+)" aria-label="Zoom in" disabled={!ready} onClick={() => transform.current?.zoomIn()}><Plus size={18} /></button>
