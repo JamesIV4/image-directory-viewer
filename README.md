@@ -1,0 +1,98 @@
+# Lumen
+
+A dark desktop image browser for local folders. Open a folder or drop it into the window to browse its images and all nested folders.
+
+## Run on Windows
+
+Launch `release/Lumen-1.0.0-x64.exe`. The portable executable requires no Node.js installation. It stores preferences and disposable caches in your Windows application data directory; your original images are never modified.
+
+To run from source, install Node.js 24 LTS, then run:
+
+```powershell
+npm.cmd ci
+npm.cmd run build
+npm.cmd start
+```
+
+Development with live updates:
+
+```powershell
+npm.cmd run dev
+```
+
+Open a particular folder at startup:
+
+```powershell
+npm.cmd start -- --folder="S:\Photos"
+```
+
+## Browsing
+
+- **All images** shows the entire recursively indexed collection. The folder tree filters to any branch; **Include subfolders** switches between that branch and just the selected folder's files.
+- **Gallery**, **Compact**, **Details**, and **Grouped by folder** views share the same search and filters. Adjust thumbnail size with the slider.
+- Search filenames and relative paths, filter by extension, and sort by name, path, modified date, or file size in either direction.
+- Click **Date** to filter by **Newer than**, **Older than**, or both. Each field accepts a local date and time, and filters the file's modified timestamp (not the camera capture date). The boundaries are strict: files exactly at a specified threshold are excluded. **Clear dates** removes both limits; an invalid range shows a message. Date filters work with all collection views and folder filters and survive a refresh.
+- The inline date-range bar spans the oldest to newest modified timestamps among images matching the current folder, search, and file-type scope. Drag either end to filter live; the date inputs stay synchronized. Hover anywhere on the bar to see its date/time, or focus a handle and use the arrow keys. Slider ranges include their selected boundaries; moving both handles back to the outer ends restores the full time range. The time scale remains fixed while dragging.
+- Click **Condense** in the collection header to replace the app header, toolbar, date panel, and folder-filter banner with a single compact bar. Your current folder, visible image count, and active-filter badge remain visible, while all filters stay applied. Hover the badge for the filter summary; click it or **Controls** to expand again. The layout preference is remembered. Ctrl+F or / expands the controls and focuses search.
+- Follow the clickable breadcrumbs to move up the folder structure. Relative paths appear on cards, and the full image path appears in the viewer and its details panel.
+- Use the checkbox beside any folder to quickly include or exclude that whole branch. Excluded folders stay in the tree so they are easy to restore. You can include an individual subfolder inside an excluded parent; partially included branches show a mixed checkbox. Changing a parent's checkbox applies to its whole subtree. Counts in the tree reflect included images. **Include all folders** clears the folder filters. These filters follow you as you navigate or refresh the current library and reset when you open a different root folder. Original files and the index are unaffected.
+- Turn off **Include root images** to hide photos directly in the root while keeping subfolder photos. When browsing a subfolder, **Include folder images** does the same for that folder's direct images. Subfolder inclusion is controlled separately.
+- Drag the sidebar's right edge to resize it; its width is remembered. Double-click the edge to reset, or focus the divider and use Left/Right, Home, or End.
+- Right-click an image in any view for **Open image**, **Reveal in File Explorer**, **Copy image path**, **Browse this folder**, **Exclude images in this folder** (direct images only), or **Exclude folder and subfolders**. The context-menu key or Shift+F10 also opens these actions. All exclusion actions filter the view without changing files.
+- Click an image to open the original. Use the arrows to navigate the current filtered collection, scroll/pinch to zoom, and drag to pan. **Fit** fits the whole image without enlarging small images; **1:1** uses one image pixel per CSS pixel.
+- Wheel zoom changes by about 12% of the current zoom for a standard 120-pixel wheel tick. Small trackpad deltas make proportionally smaller changes.
+- **Nearest** toggles nearest-neighbor rendering above 100% zoom for pixel art and close inspection. At 100% and below, images use smooth rendering. The preference persists across images and app restarts.
+- **Image details** includes dimensions, format, color space, size, and full path. Copy the path or show the image in Explorer.
+- Use **Refresh** after adding, editing, moving, or deleting files. Refresh preserves your folder, search, and filters. Recent folders make reopening collections easy.
+
+## Keyboard shortcuts
+
+| Action | Shortcut |
+| --- | --- |
+| Open folder | Ctrl+O |
+| Search | Ctrl+F or / |
+| Refresh index | F5 |
+| Select images in the collection | Arrow keys |
+| Open selected image | Enter |
+| Previous / next image in viewer | Left / Right |
+| Close viewer or dialog | Esc |
+| Zoom in / out | + / - |
+| Fit image | F or 0 |
+| Actual size | 1 |
+| Image details | I |
+| Nearest-neighbor toggle | N |
+| Shortcut reference | ? |
+
+## Formats and limits
+
+JPEG (JPG/JPEG/JPE), PNG, WebP, GIF, AVIF, TIFF, SVG, and BMP are indexed. GIF and supported WebP animations play when viewing originals; thumbnails use the first frame. TIFF previews show the first page. SVGs are rasterized for viewing.
+
+HEIC/HEIF files are also indexed, but decoding depends on the codec support in the installed Sharp/libvips build. The prebuilt decoder does not guarantee HEVC support. Camera RAW, PSD, and ICO are not currently supported. Damaged, missing, or unsupported images show an unavailable state without preventing the rest of the collection from loading.
+
+Directory links and junctions are skipped to avoid cycles and traversal outside the chosen folder. Unreadable folders appear in indexing notices. Images over roughly 268 megapixels are rejected by the preview decoder; BMP decoding has a 100-megapixel limit. Native original image viewing remains subject to Chromium's memory and decoder limits. Very large originals can use considerable memory.
+
+## Performance and architecture
+
+- Electron provides native folder selection, local file access, clipboard, and Explorer integration. The isolated renderer runs React and TypeScript.
+- A Node worker enumerates directories and runs up to 32 file-stat calls at a time, streaming results while scanning. Indexing reads file metadata rather than decoding images.
+- Cached indexes appear when reopening a folder, then a fresh scan reconciles changed and removed files. Index snapshots are stored per root; they are caches rather than a live filesystem watcher.
+- [TanStack Virtual](https://tanstack.com/virtual/latest/docs/introduction) renders visible rows with a small buffer. Both the image collection and folder tree are virtualized.
+- [Sharp](https://sharp.pixelplumbing.com/) generates orientation-correct, aspect-preserving WebP thumbnails only when requested. Four decoding jobs run at a time, with shared requests deduplicated. BMP decoding uses `bmp-js` in a separate worker.
+- File path, size, and modification time identify cached images. Changed files get new thumbnail keys. Thumbnails live on disk across sessions; an oldest-first cleanup applies a 2 GiB soft cap at startup. A session can exceed the cap until the next launch. Index snapshots are separate from that cap.
+- [react-zoom-pan-pinch](https://github.com/BetterTyped/react-zoom-pan-pinch) supplies cursor-centered wheel zoom, pinch gestures, and panning. Originals are loaded separately from thumbnail previews.
+- The renderer accesses indexed image IDs through a custom protocol and a narrow preload API. Node integration is disabled, context isolation and sandboxing are enabled, and navigation and external windows are blocked.
+
+The app performs no image uploads and has no account requirement. Collection metadata is kept in memory, so memory use scales with the number of indexed files even though rendered cards are bounded.
+
+## Build and verify
+
+```powershell
+npm.cmd test          # Indexing, cache, orientation, TIFF/BMP decoding, error handling
+npm.cmd run test:e2e  # Build + real Electron UI checks; no browser download required
+npm.cmd run dist      # Windows x64 portable executable in release/
+npm.cmd run pack      # Unpacked desktop application in release/
+```
+
+The UI tests generate disposable fixtures in `.test-data/`, use a separate app profile, and save screenshots in `test-results/`. They check recursive filtering, breadcrumbs, all views, virtualized rendering, search, TIFF originals, zoom limits, nearest-neighbor toggling, corrupt files, refresh reconciliation, and an 800×600 window. Electron's native folder picker and actual hardware gestures should also be checked manually.
+
+Source layout: `electron/` contains filesystem and native desktop services, `src/` contains the UI, and `tests/` contains backend and Electron integration tests.

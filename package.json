@@ -1,0 +1,73 @@
+{
+  "name": "image-directory-viewer",
+  "version": "1.0.0",
+  "description": "A fast, local, recursive image browser",
+  "main": "electron/main.cjs",
+  "scripts": {
+    "dev": "concurrently -k \"vite --host 127.0.0.1\" \"wait-on http://127.0.0.1:5173 && electron . --dev\"",
+    "build": "tsc --noEmit && vite build",
+    "start": "electron .",
+    "test": "node --test tests/*.test.cjs",
+    "test:e2e": "npm run build && playwright test",
+    "dist": "npm run build && electron-builder --win portable --x64",
+    "pack": "npm run build && electron-builder --dir"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/JamesIV4/image-directory-viewer.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "bugs": {
+    "url": "https://github.com/JamesIV4/image-directory-viewer/issues"
+  },
+  "homepage": "https://github.com/JamesIV4/image-directory-viewer#readme",
+  "build": {
+    "appId": "com.jamesiv4.image-directory-viewer",
+    "productName": "Lumen",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "package.json"
+    ],
+    "asarUnpack": [
+      "node_modules/sharp/**/*",
+      "node_modules/@img/**/*"
+    ],
+    "win": {
+      "target": "portable",
+      "signAndEditExecutable": false
+    },
+    "portable": {
+      "artifactName": "Lumen-${version}-${arch}.exe"
+    }
+  },
+  "dependencies": {
+    "@radix-ui/react-slider": "^1.4.7",
+    "@tanstack/react-virtual": "^3.14.13",
+    "bmp-js": "^0.1.0",
+    "lucide-react": "^1.49.0",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "react-zoom-pan-pinch": "^4.2.0",
+    "sharp": "^0.35.5"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.63.0",
+    "@types/node": "^26.6.3",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.1",
+    "concurrently": "^10.0.5",
+    "electron": "^44.5.1",
+    "electron-builder": "^26.15.3",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.1",
+    "wait-on": "^9.5.1"
+  }
+}
