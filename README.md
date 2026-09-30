@@ -1,10 +1,35 @@
 # Lumen
 
-A dark desktop image browser for local folders. Open a folder or drop it into the window to browse its images and all nested folders.
+A fast, dark desktop image browser for local folders. Open a folder or drop it into the window to explore its images and all nested folders. No uploads or accounts; your original files stay untouched.
+
+[![Lumen's dark gallery with alpine landscapes, golden dunes, and a turquoise lake](docs/screenshots/gallery.webp)](docs/screenshots/gallery.webp)
+
+_One folder, every image. Browse a whole collection with adjustable thumbnails and a folder tree that keeps everything within reach._
+
+**[Get started](#run-on-windows)** · **[Take a closer look](#a-closer-look)** · **[Browsing guide](#browsing)** · **[Keyboard shortcuts](#keyboard-shortcuts)**
+
+| Explore                                                               | Focus                                                                                                | Inspect                                                                                              |
+| --------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| Browse nested folders in Gallery, Compact, Details, or grouped views. | Combine search, file types, date ranges, and folder checkboxes. Condense the controls for more room. | Open originals, zoom and pan, check image details, and use nearest-neighbor rendering for pixel art. |
+
+## A closer look
+
+### Room for the image
+
+Open an original and let it fill the window. Scroll to zoom, drag to pan, or switch between **Fit** and **1:1**. The details panel puts dimensions, format, and the full file path alongside the photo.
+
+[![An original alpine lake photo in Lumen's viewer, with image details and zoom controls](docs/screenshots/viewer.webp)](docs/screenshots/viewer.webp)
+
+| Find your focus                                                                                                                                                   | Give your collection more space                                                                                                         |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| [![Folder groups, branch checkboxes, and the modification-date range controls](docs/screenshots/folders-and-dates.webp)](docs/screenshots/folders-and-dates.webp) | [![Lumen's condensed controls leave more room for the image gallery](docs/screenshots/condensed.webp)](docs/screenshots/condensed.webp) |
+| Group images by folder, exclude a branch with one checkbox, and narrow the timeline with the date controls.                                                       | Hit **Condense** to tuck away the header and filters. Your folder tree and current collection remain close at hand.                     |
+
+_Click any screenshot for the full-size capture. [Photo credits and screenshot recipe](docs/screenshots/README.md)._
 
 ## Run on Windows
 
-Launch `release/Lumen-1.0.0-x64.exe`. The portable executable requires no Node.js installation. It stores preferences and disposable caches in your Windows application data directory; your original images are never modified.
+Download [Lumen for Windows x64](https://github.com/JamesIV4/image-directory-viewer/releases/latest) and launch `Lumen-1.0.0-x64.exe`. The portable executable requires no installation or Node.js. It stores preferences and disposable caches in your Windows application data directory; your original images are never modified.
 
 To run from source, install Node.js 24 LTS, then run:
 
@@ -47,21 +72,21 @@ npm.cmd start -- --folder="S:\Photos"
 
 ## Keyboard shortcuts
 
-| Action | Shortcut |
-| --- | --- |
-| Open folder | Ctrl+O |
-| Search | Ctrl+F or / |
-| Refresh index | F5 |
-| Select images in the collection | Arrow keys |
-| Open selected image | Enter |
+| Action                          | Shortcut     |
+| ------------------------------- | ------------ |
+| Open folder                     | Ctrl+O       |
+| Search                          | Ctrl+F or /  |
+| Refresh index                   | F5           |
+| Select images in the collection | Arrow keys   |
+| Open selected image             | Enter        |
 | Previous / next image in viewer | Left / Right |
-| Close viewer or dialog | Esc |
-| Zoom in / out | + / - |
-| Fit image | F or 0 |
-| Actual size | 1 |
-| Image details | I |
-| Nearest-neighbor toggle | N |
-| Shortcut reference | ? |
+| Close viewer or dialog          | Esc          |
+| Zoom in / out                   | + / -        |
+| Fit image                       | F or 0       |
+| Actual size                     | 1            |
+| Image details                   | I            |
+| Nearest-neighbor toggle         | N            |
+| Shortcut reference              | ?            |
 
 ## Formats and limits
 
