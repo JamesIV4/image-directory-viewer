@@ -252,7 +252,7 @@ export default function App() {
           <span className="condensed-count" title={`${filtered.length.toLocaleString()} visible images / ${items.length.toLocaleString()} indexed images`}>{filtered.length.toLocaleString()}<span> images</span></span>
           {activeFilterSummary.length > 0 && <button className="condensed-filters" title={activeFilterSummary.join('\n')} aria-label="Show active filters" onClick={() => setControlsCollapsed(false)}><ListFilter size={15} /><span>{activeFilterSummary.length} filters</span></button>}
           {(error || dateRangeInvalid) && <button className="icon-button condensed-error" title={error || '“Newer than” must be before “Older than”.'} aria-label="Show filter or library error" onClick={() => setControlsCollapsed(false)}><CircleAlert size={17} /></button>}
-          <button className="icon-button condensed-open" title="Open folder (Ctrl O)" aria-label="Open folder" onClick={() => void open()}><FolderOpen size={17} /></button>
+          <button className="icon-button" aria-label="Refresh library" title="Refresh library (F5)" disabled={scanning} onClick={() => void window.lumen.rescan().catch(error => setError(error.message))}><RefreshCw size={17} /></button>
           <button className="controls-toggle" aria-label="Expand controls" aria-expanded={false} aria-controls="collection-controls" title="Expand browsing controls and filters" onClick={() => setControlsCollapsed(false)}><ChevronsDown size={17} /><span>Controls</span></button>
         </div>}
         <div id="collection-controls" className="collection-controls" hidden={controlsCollapsed}>
