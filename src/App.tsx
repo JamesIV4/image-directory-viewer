@@ -43,6 +43,7 @@ export default function App() {
   }, []);
   useEffect(() => { localStorage.setItem('lumen.sidebarWidth', JSON.stringify(sidebarWidth)); }, [sidebarWidth]);
   const [selected, setSelected] = useState(''), [viewer, setViewer] = useState(false);
+  const [scrollReset, setScrollReset] = useState(0);
   const [toast, setToast] = useState(''), [dragging, setDragging] = useState(false), [help, setHelp] = useState(false), [showWarnings, setShowWarnings] = useState(false);
   const search = useRef<HTMLInputElement>(null), generation = useRef(0), indexed = useRef(new Map<string, ImageItem>());
   const focusSearchPending = useRef(false);
@@ -119,6 +120,11 @@ export default function App() {
     try { const result = await window.lumen.openFolder(path); if (result) setRecent(result.recent); }
     catch (error) { setError((error as Error).message); }
   }, []);
+  const refresh = useCallback(() => {
+    if (!viewer) setSelected('');
+    setScrollReset(value => value + 1);
+    void window.lumen.rescan().catch(error => setError(error.message));
+  }, [viewer]);
   const extensions = useMemo(() => [...new Set(items.map(i => i.extension))].sort(), [items]);
   const { includedFolders, includedCounts } = useMemo(() => {
     const includedFolders = new Set<string>();
@@ -172,7 +178,7 @@ export default function App() {
       const input = (event.target as HTMLElement).matches('input, select, textarea');
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'o') { event.preventDefault(); void open(); }
       else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'f') { event.preventDefault(); focusSearch(); }
-      else if (event.key === 'F5') { event.preventDefault(); void window.lumen.rescan().catch(error => setError(error.message)); }
+      else if (event.key === 'F5') { event.preventDefault(); refresh(); }
       else if (!viewer && !input && !help) {
         if (event.key === '/') { event.preventDefault(); focusSearch(); }
         else if (event.key === 'ArrowRight' || event.key === 'ArrowDown') { event.preventDefault(); navigate(1); }
@@ -183,7 +189,7 @@ export default function App() {
       if (event.key === 'Escape') { setHelp(false); setShowWarnings(false); if (input) search.current?.blur(); }
     };
     window.addEventListener('keydown', keydown); return () => window.removeEventListener('keydown', keydown);
-  }, [open, viewer, help, navigate, current, contextMenu, focusSearch]);
+  }, [open, viewer, help, navigate, current, contextMenu, focusSearch, refresh]);
   const chooseFolder = (path: string) => { setFolder(path); setSelected(''); };
   const resetFolderFilters = () => { setFolderRules(new Map()); setExcludedDirectImages(new Set()); };
   const hasFolderFilters = folderRules.size > 0 || excludedDirectImages.size > 0;
@@ -252,7 +258,7 @@ export default function App() {
           <span className="condensed-count" title={`${filtered.length.toLocaleString()} visible images / ${items.length.toLocaleString()} indexed images`}>{filtered.length.toLocaleString()}<span> images</span></span>
           {activeFilterSummary.length > 0 && <button className="condensed-filters" title={activeFilterSummary.join('\n')} aria-label="Show active filters" onClick={() => setControlsCollapsed(false)}><ListFilter size={15} /><span>{activeFilterSummary.length} filters</span></button>}
           {(error || dateRangeInvalid) && <button className="icon-button condensed-error" title={error || '“Newer than” must be before “Older than”.'} aria-label="Show filter or library error" onClick={() => setControlsCollapsed(false)}><CircleAlert size={17} /></button>}
-          <button className="icon-button" aria-label="Refresh library" title="Refresh library (F5)" disabled={scanning} onClick={() => void window.lumen.rescan().catch(error => setError(error.message))}><RefreshCw size={17} /></button>
+          <button className="icon-button" aria-label="Refresh library" title="Refresh library (F5)" disabled={scanning} onClick={refresh}><RefreshCw size={17} /></button>
           <button className="controls-toggle" aria-label="Expand controls" aria-expanded={false} aria-controls="collection-controls" title="Expand browsing controls and filters" onClick={() => setControlsCollapsed(false)}><ChevronsDown size={17} /><span>Controls</span></button>
         </div>}
         <div id="collection-controls" className="collection-controls" hidden={controlsCollapsed}>
@@ -269,7 +275,7 @@ export default function App() {
           </label>
           <label className="toggle-label"><input type="checkbox" checked={recursive} onChange={event => setRecursive(event.target.checked)} /><span className="toggle-track" />Include subfolders</label>
         </div>
-          <button className="icon-button" aria-label="Refresh library" title="Refresh library (F5)" disabled={scanning} onClick={() => void window.lumen.rescan().catch(error => setError(error.message))}><RefreshCw size={17} /></button>
+          <button className="icon-button" aria-label="Refresh library" title="Refresh library (F5)" disabled={scanning} onClick={refresh}><RefreshCw size={17} /></button>
           <button className="controls-toggle" aria-label="Collapse controls" aria-expanded={true} aria-controls="collection-controls" title="Condense the header and filters to make more room for images" onClick={() => setControlsCollapsed(true)}><ChevronsUp size={17} /><span>Condense</span></button></div>
         </div>
         <div className="toolbar"><label className="search"><Search size={17} /><input ref={search} placeholder="Search names or paths…" value={query} onChange={event => setQuery(event.target.value)} aria-label="Search images" />
@@ -297,7 +303,7 @@ export default function App() {
         {error && <div className="error-banner"><CircleAlert size={16} /><span>{error}</span><button className="icon-button" aria-label="Dismiss error" onClick={() => setError('')}><X size={16} /></button></div>}
         </div>
         {filtered.length ? <Library key={`${root}:${folder}:${recursive}:${extension}:${deferredQuery}:${sort}:${descending}:${[...folderRules].map(([p, included]) => `${p}=${included}`).join('|')}:${[...excludedDirectImages].join('|')}`} items={filtered} view={view} size={size} selected={selected} onSelect={setSelected}
-          onOpen={item => { setSelected(item.id); setViewer(true); }} onFolder={chooseFolder}
+          scrollReset={scrollReset} onOpen={item => { setSelected(item.id); setViewer(true); }} onFolder={chooseFolder}
           onContextMenu={(item, x, y) => { setSelected(item.id); setContextMenu({ item, x, y }); }} /> :
           <div className="no-results">{scanning ? <><LoaderCircle size={36} className="spin" /><h2>Discovering your images…</h2><p>You can browse as soon as the first images are indexed.</p></> : <><Search size={36} /><h2>{items.length ? 'No matching images' : 'No images in this folder'}</h2><p>{items.length ? 'Try another search, date range, file type, or folder.' : 'Choose another folder, or refresh after adding images.'}</p>{(query || extension !== 'all' || !recursive || newerThan || olderThan) && <button className="button" onClick={() => { setQuery(''); setExtension('all'); setRecursive(true); setNewerThan(''); setOlderThan(''); }}>Reset filters</button>}</>}</div>}
       </> : <div className="welcome">

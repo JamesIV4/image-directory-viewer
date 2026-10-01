@@ -85,8 +85,8 @@ export function FolderTree({ folders, selected, onSelect, rootLabel, rules, coun
 }
 
 type Row = { type: 'images'; items: ImageItem[] } | { type: 'folder'; folder: string; count: number };
-export default function Library({ items, view, size, selected, onSelect, onOpen, onFolder, onContextMenu }: {
-  items: ImageItem[]; view: View; size: number; selected: string; onSelect: (id: string) => void;
+export default function Library({ items, view, size, selected, scrollReset, onSelect, onOpen, onFolder, onContextMenu }: {
+  items: ImageItem[]; view: View; size: number; selected: string; scrollReset: number; onSelect: (id: string) => void;
   onOpen: (item: ImageItem) => void; onFolder: (path: string) => void;
   onContextMenu: (item: ImageItem, x: number, y: number) => void;
 }) {
@@ -116,7 +116,7 @@ export default function Library({ items, view, size, selected, onSelect, onOpen,
     estimateSize: index => rows[index].type === 'folder' ? 58 : height, overscan: 3,
   });
   useEffect(() => { virtual.measure(); }, [height, rows, virtual]);
-  useEffect(() => { scroller.current?.scrollTo({ top: 0 }); }, [view]);
+  useEffect(() => { scroller.current?.scrollTo({ top: 0 }); }, [view, scrollReset]);
   useEffect(() => {
     if (!selected) return;
     const index = rows.findIndex(row => row.type === 'images' && row.items.some(i => i.id === selected));
