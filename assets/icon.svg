@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <!-- Aperture geometry from Lucide (ISC); see lucide-LICENSE. -->
+  <defs>
+    <linearGradient id="background" x2="1" y2="1">
+      <stop stop-color="#383047"/>
+      <stop offset="1" stop-color="#17131f"/>
+    </linearGradient>
+    <linearGradient id="aperture" x2="1" y2="1">
+      <stop stop-color="#e4d7ff"/>
+      <stop offset="1" stop-color="#b8a0ff"/>
+    </linearGradient>
+  </defs>
+  <rect x="16" y="16" width="480" height="480" rx="108" fill="url(#background)"/>
+  <g transform="translate(64 64) scale(16)" fill="none" stroke="url(#aperture)" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="12" cy="12" r="10"/>
+    <path d="m14.31 8 5.74 9.94M9.69 8h11.48m-13.79 4 5.74-9.94M9.69 16 3.95 6.06M14.31 16H2.83m13.79-4-5.74 9.94"/>
+  </g>
+</svg>

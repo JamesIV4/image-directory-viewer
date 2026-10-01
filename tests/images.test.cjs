@@ -6,6 +6,50 @@ const os = require('node:os');
 const sharp = require('sharp');
 const { ImageService, pruneCache } = require('../electron/images.cjs');
 
+test('image service loads the native decoder only when decoding is requested', async t => {
+  const { Worker } = require('node:worker_threads');
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'lumen-lazy-decoder-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const source = path.join(root, 'image.png');
+  await sharp({ create: { width: 10, height: 20, channels: 3, background: '#123456' } }).png().toFile(source);
+  const result = await new Promise((resolve, reject) => {
+    const worker = new Worker(`
+      const { parentPort, workerData } = require('node:worker_threads');
+      const { ImageService } = require(workerData.module);
+      const loaded = () => Object.keys(require.cache).some(file => /[\\\\/]sharp[\\\\/]/.test(file));
+      (async () => {
+        const service = new ImageService(workerData.root);
+        const before = loaded();
+        await service.full({ path: workerData.source, extension: 'png' });
+        const direct = loaded();
+        const metadata = await service.metadata({ id: 'lazy', path: workerData.source, extension: 'png' });
+        parentPort.postMessage({ before, direct, after: loaded(), metadata });
+      })().catch(error => { throw error; });
+    `, { eval: true, workerData: { module: require.resolve('../electron/images.cjs'), root, source } });
+    worker.once('message', resolve); worker.once('error', reject);
+  });
+  assert.equal(result.before, false);
+  assert.equal(result.direct, false);
+  assert.equal(result.after, true);
+  assert.equal(result.metadata.width, 10);
+  assert.equal(result.metadata.height, 20);
+});
+
+test('cache housekeeping preserves temporary and newly generated files', async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'lumen-prune-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const folder = path.join(root, 'ab');
+  await fs.mkdir(folder);
+  const old = path.join(folder, 'old.webp'), fresh = path.join(folder, 'fresh.webp'), temporary = path.join(folder, 'active.tmp');
+  await Promise.all([old, fresh, temporary].map(file => fs.writeFile(file, 'cache')));
+  const cutoff = Date.now();
+  await fs.utimes(old, new Date(cutoff - 10000), new Date(cutoff - 10000));
+  await fs.utimes(fresh, new Date(cutoff + 10000), new Date(cutoff + 10000));
+  await pruneCache(root, 0, cutoff);
+  await assert.rejects(fs.stat(old), { code: 'ENOENT' });
+  assert.deepEqual((await fs.readdir(folder)).sort(), ['active.tmp', 'fresh.webp']);
+});
+
 test('thumbnail cache deduplicates work, respects aspect/orientation, and converts TIFF originals', async t => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'lumen-images-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));

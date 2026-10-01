@@ -11,11 +11,11 @@ export function Thumb({ item }: { item: ImageItem }) {
     <img src={thumbnail(item)} alt={item.name} loading="lazy" decoding="async" draggable={false} onError={() => setFailed(true)} />;
 }
 
-function FolderCheck({ folder, rules, counts, onChange }: {
-  folder: Folder; rules: FolderRules; counts: Map<string, number>; onChange: (folder: string, included: boolean) => void;
+function FolderCheck({ folder, rules, counts, patternIncluded, onChange }: {
+  folder: Folder; rules: FolderRules; counts: Map<string, number>; patternIncluded: (folder: string) => boolean; onChange: (folder: string, included: boolean) => void;
 }) {
   const included = counts.get(folder.path) || 0;
-  const checked = folder.count ? included === folder.count : folderIncluded(folder.path, rules);
+  const checked = folder.count ? included === folder.count : folderIncluded(folder.path, rules) && patternIncluded(folder.path);
   const mixed = included > 0 && included < folder.count;
   return <input className="folder-check" type="checkbox" checked={checked}
     ref={element => { if (element) element.indeterminate = mixed; }}
@@ -24,9 +24,9 @@ function FolderCheck({ folder, rules, counts, onChange }: {
     onChange={event => onChange(folder.path, event.target.checked)} />;
 }
 
-export function FolderTree({ folders, selected, onSelect, rootLabel, rules, counts, onInclusionChange }: {
+export function FolderTree({ folders, selected, onSelect, rootLabel, rules, counts, patternIncluded, onInclusionChange }: {
   folders: Folder[]; selected: string; onSelect: (path: string) => void; rootLabel: string;
-  rules: FolderRules; counts: Map<string, number>; onInclusionChange: (folder: string, included: boolean) => void;
+  rules: FolderRules; counts: Map<string, number>; patternIncluded: (folder: string) => boolean; onInclusionChange: (folder: string, included: boolean) => void;
 }) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set(['']));
   const scroller = useRef<HTMLDivElement>(null);
@@ -57,7 +57,7 @@ export function FolderTree({ folders, selected, onSelect, rootLabel, rules, coun
   const virtual = useVirtualizer({ count: rows.length, getScrollElement: () => scroller.current, estimateSize: () => 36, overscan: 8 });
   return <>
     <div className={`tree-root-row ${selected === '' ? 'active' : ''}`}>
-      <FolderCheck folder={folders.find(f => !f.path) || { path: '', name: rootLabel, count: 0, ownCount: 0 }} rules={rules} counts={counts} onChange={onInclusionChange} />
+      <FolderCheck folder={folders.find(f => !f.path) || { path: '', name: rootLabel, count: 0, ownCount: 0 }} rules={rules} counts={counts} patternIncluded={patternIncluded} onChange={onInclusionChange} />
       <button className="tree-root" onClick={() => onSelect('')} title={rootLabel}>
         <FolderIcon size={17} /><span>{rootLabel}</span><small>{(counts.get('') || 0).toLocaleString()}</small>
       </button>
@@ -66,14 +66,14 @@ export function FolderTree({ folders, selected, onSelect, rootLabel, rules, coun
       <div style={{ height: virtual.getTotalSize(), position: 'relative' }}>
         {virtual.getVirtualItems().map(row => {
           const { folder, depth, children } = rows[row.index];
-          const excluded = folder.count ? !counts.get(folder.path) : !folderIncluded(folder.path, rules);
+          const excluded = folder.count ? !counts.get(folder.path) : !folderIncluded(folder.path, rules) || !patternIncluded(folder.path);
           return <div key={folder.path} className={`tree-row ${selected === folder.path ? 'active' : ''} ${excluded ? 'excluded' : ''}`}
             style={{ transform: `translateY(${row.start}px)`, paddingLeft: 6 + depth * 14 }}>
             <button className="tree-toggle" aria-label={`${expanded.has(folder.path) ? 'Collapse' : 'Expand'} ${folder.name}`}
               disabled={!children} onClick={() => setExpanded(previous => {
                 const next = new Set(previous); if (next.has(folder.path)) next.delete(folder.path); else next.add(folder.path); return next;
               })}>{children && (expanded.has(folder.path) ? <ChevronDown size={13} /> : <ChevronRight size={13} />)}</button>
-            <FolderCheck folder={folder} rules={rules} counts={counts} onChange={onInclusionChange} />
+            <FolderCheck folder={folder} rules={rules} counts={counts} patternIncluded={patternIncluded} onChange={onInclusionChange} />
             <button className="tree-label" onClick={() => onSelect(folder.path)} title={folder.path}>
               <FolderIcon size={15} /><span>{folder.name}</span><small title={`${(counts.get(folder.path) || 0).toLocaleString()} included / ${folder.count.toLocaleString()} indexed`}>{(counts.get(folder.path) || 0).toLocaleString()}</small>
             </button>

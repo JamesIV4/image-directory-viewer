@@ -3,7 +3,7 @@ import { Aperture, ArrowDownWideNarrow, ArrowUpWideNarrow, Check, ChevronRight, 
 import Library, { FolderTree, type View } from './Library';
 import Viewer from './Viewer';
 import { rootName, type ImageItem, type Folder, type Snapshot } from './types';
-import { folderIncluded, setBranchIncluded, type FolderRules } from './folder-filter';
+import { createFolderPatternFilter, splitFolderPatterns, folderIncluded, setBranchIncluded, type FolderRules } from './folder-filter';
 import ImageContextMenu from './ImageContextMenu';
 import DateRangeSlider from './DateRangeSlider';
 
@@ -19,6 +19,12 @@ export default function App() {
   const [warnings, setWarnings] = useState<string[]>([]), [error, setError] = useState('');
   const [folder, setFolder] = useState(''), [recursive, setRecursive] = useState(true);
   const [folderRules, setFolderRules] = useState<FolderRules>(new Map());
+  const [includeFolders, setIncludeFolders] = useState<string>(saved('lumen.includeFolders', ''));
+  const [excludeFolders, setExcludeFolders] = useState<string>(saved('lumen.excludeFolders', ''));
+  useEffect(() => { localStorage.setItem('lumen.includeFolders', JSON.stringify(includeFolders)); }, [includeFolders]);
+  useEffect(() => { localStorage.setItem('lumen.excludeFolders', JSON.stringify(excludeFolders)); }, [excludeFolders]);
+  const deferredIncludeFolders = useDeferredValue(includeFolders), deferredExcludeFolders = useDeferredValue(excludeFolders);
+  const folderPatternIncluded = useMemo(() => createFolderPatternFilter(deferredIncludeFolders, deferredExcludeFolders), [deferredIncludeFolders, deferredExcludeFolders]);
   const [excludedDirectImages, setExcludedDirectImages] = useState<Set<string>>(new Set());
   const [query, setQuery] = useState(''), [extension, setExtension] = useState('all');
   const [newerThan, setNewerThan] = useState(''), [olderThan, setOlderThan] = useState('');
@@ -129,7 +135,7 @@ export default function App() {
   const { includedFolders, includedCounts } = useMemo(() => {
     const includedFolders = new Set<string>();
     const includedCounts = new Map<string, number>();
-    for (const entry of folders) if (folderIncluded(entry.path, folderRules) && !excludedDirectImages.has(entry.path)) includedFolders.add(entry.path);
+    for (const entry of folders) if (folderIncluded(entry.path, folderRules) && folderPatternIncluded(entry.path) && !excludedDirectImages.has(entry.path)) includedFolders.add(entry.path);
     for (const item of items) if (includedFolders.has(item.folder)) {
       let current = item.folder;
       while (true) {
@@ -139,7 +145,7 @@ export default function App() {
       }
     }
     return { includedFolders, includedCounts };
-  }, [items, folders, folderRules, excludedDirectImages]);
+  }, [items, folders, folderRules, folderPatternIncluded, excludedDirectImages]);
   const hiddenInScope = useMemo(() => items.filter(item => !includedFolders.has(item.folder)
     && (recursive ? (!folder || item.folder === folder || item.folder.startsWith(folder + '/')) : item.folder === folder)).length,
   [items, folder, recursive, includedFolders]);
@@ -191,8 +197,8 @@ export default function App() {
     window.addEventListener('keydown', keydown); return () => window.removeEventListener('keydown', keydown);
   }, [open, viewer, help, navigate, current, contextMenu, focusSearch, refresh]);
   const chooseFolder = (path: string) => { setFolder(path); setSelected(''); };
-  const resetFolderFilters = () => { setFolderRules(new Map()); setExcludedDirectImages(new Set()); };
-  const hasFolderFilters = folderRules.size > 0 || excludedDirectImages.size > 0;
+  const resetFolderFilters = () => { setFolderRules(new Map()); setExcludedDirectImages(new Set()); setIncludeFolders(''); setExcludeFolders(''); setSelected(''); };
+  const hasFolderFilters = folderRules.size > 0 || excludedDirectImages.size > 0 || splitFolderPatterns(includeFolders).length > 0 || splitFolderPatterns(excludeFolders).length > 0;
   const setFolderBranch = (path: string, included: boolean) => {
     setFolderRules(previous => setBranchIncluded(previous, path, included));
     setExcludedDirectImages(previous => new Set([...previous].filter(p => path && p !== path && !p.startsWith(path + '/'))));
@@ -210,7 +216,9 @@ export default function App() {
     newerThan ? `Modified newer than ${new Date(newerThan).toLocaleString()}` : '',
     olderThan ? `Modified older than ${new Date(olderThan).toLocaleString()}` : '',
     !recursive ? 'Subfolders excluded' : '',
-    hasFolderFilters ? `Folder filters: ${hiddenInScope.toLocaleString()} images hidden in this view` : '',
+    includeFolders.trim() ? `Include folders: ${includeFolders.trim()}` : '',
+    excludeFolders.trim() ? `Exclude folders: ${excludeFolders.trim()}` : '',
+    folderRules.size > 0 || excludedDirectImages.size > 0 ? `Folder checkboxes: ${hiddenInScope.toLocaleString()} images hidden in this view` : '',
   ].filter(Boolean);
   const totalBytes = useMemo(() => items.reduce((n, i) => n + i.size, 0), [items]);
 
@@ -227,7 +235,7 @@ export default function App() {
       <div className="sidebar-label"><span className="eyebrow">LIBRARY</span><button className="icon-button" title="Hide sidebar" aria-label="Hide sidebar" onClick={() => setSidebar(false)}><PanelLeftClose size={16} /></button></div>
       <button className={`all-images ${folder === '' && recursive ? 'active' : ''}`} onClick={() => { chooseFolder(''); setRecursive(true); }}><Image size={18} /><span>All images</span><small>{items.length.toLocaleString()}</small></button>
       <div className="sidebar-section"><span className="eyebrow">FOLDERS</span>{hasFolderFilters ? <button className="folder-reset" aria-label="Include all folders" title="Include all folders and direct images" onClick={resetFolderFilters}>Reset</button> : scanning && <LoaderCircle className="spin" size={13} />}</div>
-      {root ? <FolderTree key={root} folders={folders} selected={folder} onSelect={chooseFolder} rootLabel={rootName(root)} rules={folderRules} counts={includedCounts}
+      {root ? <FolderTree key={root} folders={folders} selected={folder} onSelect={chooseFolder} rootLabel={rootName(root)} rules={folderRules} counts={includedCounts} patternIncluded={folderPatternIncluded}
         onInclusionChange={setFolderBranch} /> : <p className="sidebar-empty">Open a folder to explore its images.</p>}
       <div className="recent-folders"><span className="eyebrow">RECENT FOLDERS</span>
         {recent.length ? recent.slice(0, 5).map(path => <button key={path} title={path} onClick={() => void open(path)}><FolderOpen size={14} /><span>{rootName(path)}</span></button>) : <span className="muted">Your folders will appear here.</span>}
@@ -270,7 +278,7 @@ export default function App() {
         <p className="collection-path" title={root}>{root}</p></div>
         <div className="heading-actions"><div className="scope-toggles">
           <label className="toggle-label direct-images-toggle" title="Include images directly in this folder; subfolders are controlled separately">
-            <input type="checkbox" checked={!excludedDirectImages.has(folder)} disabled={!folderIncluded(folder, folderRules)}
+            <input type="checkbox" checked={!excludedDirectImages.has(folder)} disabled={!folderIncluded(folder, folderRules) || !folderPatternIncluded(folder)}
               onChange={event => setDirectImages(folder, event.target.checked)} /><span className="toggle-track" />{folder ? 'Include folder images' : 'Include root images'}
           </label>
           <label className="toggle-label"><input type="checkbox" checked={recursive} onChange={event => setRecursive(event.target.checked)} /><span className="toggle-track" />Include subfolders</label>
@@ -290,6 +298,13 @@ export default function App() {
           <div className="view-switch" aria-label="Collection view">{([
             ['grid', LayoutGrid, 'Gallery view'], ['compact', Grid2X2, 'Compact view'], ['list', List, 'Details view'], ['folders', Folders, 'Grouped by folder'],
           ] as const).map(([value, Icon, label]) => <button key={value} aria-label={label} title={label} aria-pressed={view === value} className={view === value ? 'active' : ''} onClick={() => setView(value)}><Icon size={17} /></button>)}</div>
+        </div>
+        <div className="folder-pattern-fields" role="region" aria-label="Folder patterns">
+          <label>Include folders<input aria-label="Include folders" aria-describedby="folder-pattern-hint" placeholder="e.g. Photos, **/Screenshots" value={includeFolders}
+            onChange={event => { setIncludeFolders(event.target.value); setSelected(''); setScrollReset(value => value + 1); }} /></label>
+          <label>Exclude folders<input aria-label="Exclude folders" aria-describedby="folder-pattern-hint" placeholder="e.g. Thumbnails, **/Cache" value={excludeFolders}
+            onChange={event => { setExcludeFolders(event.target.value); setSelected(''); setScrollReset(value => value + 1); }} /></label>
+          <p id="folder-pattern-hint">Comma-separated names or patterns. Matches include subfolders; exclusions win. Leave Include empty for all folders.</p>
         </div>
         {dateFiltersOpen && <div className="date-filter-panel" role="region" aria-label="Date and time filters">
           <div className="date-filter-description"><CalendarClock size={17} /><div><strong>Modified date & time</strong><span>In your local time zone</span></div></div>

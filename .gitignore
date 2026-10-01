@@ -5,3 +5,4 @@ test-results/
 playwright-report/
 .test-data/
 *.log
+.packaged-build.json

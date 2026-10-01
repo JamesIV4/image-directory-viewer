@@ -101,6 +101,35 @@ test('quick folder exclusions, nested include exceptions, navigation, and refres
   await page.screenshot({ path: 'test-results/folder-controls.png' });
 });
 
+test('comma-separated folder include and exclude fields combine, survive refresh, and reset', async () => {
+  const include = page.getByRole('textbox', { name: 'Include folders', exact: true });
+  const exclude = page.getByRole('textbox', { name: 'Exclude folders', exact: true });
+  await include.fill('Landscapes, Empty');
+  await expect(page.locator('h1')).toContainText('All images36');
+  await exclude.fill(' **/Mountains, Textures ');
+  await expect(page.locator('h1')).toContainText('All images20');
+  await exclude.fill(' **/Mountains, Textures, Empty ');
+  await expect(page.getByRole('checkbox', { name: 'Include Empty', exact: true })).not.toBeChecked();
+  await exclude.fill(' **/Mountains, Textures ');
+  await expect(page.getByRole('checkbox', { name: 'Include Landscapes', exact: true })).toHaveAttribute('aria-checked', 'mixed');
+  await page.getByRole('button', { name: 'Refresh library', exact: true }).click();
+  await expect(page.getByText('1,642 images indexed', { exact: false })).toBeVisible();
+  await expect(page.locator('h1')).toContainText('All images20');
+  await page.screenshot({ path: 'test-results/folder-patterns.png' });
+  await page.reload();
+  await expect(include).toHaveValue('Landscapes, Empty');
+  await expect(exclude).toHaveValue(' **/Mountains, Textures ');
+  await expect(page.locator('h1')).toContainText('All images20');
+  await page.getByRole('button', { name: 'Collapse controls', exact: true }).click();
+  await expect(page.locator('.condensed-filters')).toHaveAttribute('title', /Include folders: Landscapes, Empty/);
+  await page.getByRole('button', { name: 'Expand controls', exact: true }).click();
+  await include.fill('Missing');
+  await expect(page.getByRole('heading', { name: 'No matching images' })).toBeVisible();
+  await page.locator('.folder-filter-banner').getByRole('button', { name: 'Include all folders' }).click();
+  await expect(include).toHaveValue(''); await expect(exclude).toHaveValue('');
+  await expect(page.locator('h1')).toContainText('All images1,642');
+});
+
 test('original image fit, 1:1, smooth wheel zoom, navigation, and details', async () => {
   await page.locator('.tree-label').filter({ hasText: 'Landscapes' }).click();
   await page.locator('.image-card').first().click();

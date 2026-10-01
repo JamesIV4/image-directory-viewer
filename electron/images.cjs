@@ -1,10 +1,16 @@
 const fs = require('node:fs/promises');
 const path = require('node:path');
-const sharp = require('sharp');
 const { Worker } = require('node:worker_threads');
 
-sharp.cache({ memory: 64, files: 0, items: 64 });
-sharp.concurrency(1);
+let decoder;
+function sharp(...args) {
+  if (!decoder) {
+    decoder = require('sharp');
+    decoder.cache({ memory: 64, files: 0, items: 64 });
+    decoder.concurrency(1);
+  }
+  return decoder(...args);
+}
 const inputOptions = { limitInputPixels: 268402689, failOn: 'error' };
 const bmpWork = data => new Promise((resolve, reject) => {
   const worker = new Worker(path.join(__dirname, 'bmp-worker.cjs'), { workerData: data });
@@ -68,16 +74,18 @@ class ImageService {
   }
 }
 
-// Run only at startup, before decoding jobs begin. Old entries are discarded
-// at a 2 GiB soft limit; an active session may exceed it until the next launch.
-async function pruneCache(cacheDir, limit = 2 * 1024 ** 3) {
+// Only completed entries predating this cleanup are eligible. Decoders can run
+// concurrently; ignore their temporary files and tolerate disappearing entries.
+async function pruneCache(cacheDir, limit = 2 * 1024 ** 3, cutoff = Date.now()) {
   const entries = [];
   try {
     for (const dir of await fs.readdir(cacheDir, { withFileTypes: true })) if (dir.isDirectory()) {
       const folder = path.join(cacheDir, dir.name);
       for (const file of await fs.readdir(folder)) {
-        const filePath = path.join(folder, file), stat = await fs.stat(filePath);
-        entries.push({ path: filePath, size: stat.size, modified: stat.mtimeMs });
+        if (file.endsWith('.tmp')) continue;
+        const filePath = path.join(folder, file);
+        const stat = await fs.stat(filePath).catch(() => null);
+        if (stat?.isFile() && stat.mtimeMs < cutoff) entries.push({ path: filePath, size: stat.size, modified: stat.mtimeMs });
       }
     }
     let total = entries.reduce((n, e) => n + e.size, 0);

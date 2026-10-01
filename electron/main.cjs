@@ -4,12 +4,20 @@ const fs = require('node:fs/promises');
 const { pathToFileURL } = require('node:url');
 const { Worker } = require('node:worker_threads');
 const crypto = require('node:crypto');
-const { ImageService, pruneCache } = require('./images.cjs');
+const { ImageService } = require('./images.cjs');
 
+if (process.platform === 'win32') app.setAppUserModelId('com.jamesiv4.image-directory-viewer');
 if (process.env.LUMEN_TEST_DATA) app.setPath('userData', process.env.LUMEN_TEST_DATA);
 protocol.registerSchemesAsPrivileged([{ scheme: 'lumen', privileges: { standard: true, secure: true, supportFetchAPI: true } }]);
-let window, worker, service, root = '', items = new Map(), snapshot = null, scanning = false, generation = 0;
+let window, worker, cacheWorker, service, root = '', items = new Map(), snapshot = null, scanning = false, generation = 0;
 let recent = [];
+let decoding = false, cacheMaintenance;
+async function beforeImages() {
+  decoding = true;
+  // Stop idle housekeeping before serving any image, so cleanup cannot remove
+  // a cached file between checking its existence and streaming it to Chromium.
+  if (cacheWorker) { cacheMaintenance ??= cacheWorker.terminate(); await cacheMaintenance; }
+}
 const dev = process.argv.includes('--dev');
 const send = event => { if (window && !window.isDestroyed()) window.webContents.send('library:event', { ...event, generation }); };
 const settingsFile = () => path.join(app.getPath('userData'), 'settings.json');
@@ -51,12 +59,12 @@ app.whenReady().then(async () => {
   await fs.mkdir(app.getPath('userData'), { recursive: true });
   try { const data = JSON.parse(await fs.readFile(settingsFile(), 'utf8')); recent = (data.recent || []).filter(p => typeof p === 'string').slice(0, 8); } catch {}
   const cacheDir = path.join(app.getPath('userData'), 'thumbnails');
-  await pruneCache(cacheDir);
   service = new ImageService(cacheDir);
   protocol.handle('lumen', async request => {
     try {
       const url = new URL(request.url), id = url.pathname.slice(1);
       const item = indexed(id);
+      await beforeImages();
       const file = url.hostname === 'thumb' ? await service.thumbnail(item, request.signal)
         : url.hostname === 'image' ? await service.full(item) : null;
       if (!file) return new Response('Unknown resource', { status: 404 });
@@ -84,21 +92,27 @@ app.whenReady().then(async () => {
       send({ type: 'complete', data: { root, items: [...items.values()], folders: snapshot?.folders || [], warnings: ['Scan stopped. Refresh to finish indexing.'], scannedAt: Date.now(), version: 1 } });
     }
   });
-  ipcMain.handle('image:metadata', (_event, id) => service.metadata(indexed(id)));
+  ipcMain.handle('image:metadata', async (_event, id) => { const item = indexed(id); await beforeImages(); return service.metadata(item); });
   ipcMain.handle('image:reveal', (_event, id) => shell.showItemInFolder(indexed(id).path));
   ipcMain.handle('image:copy', (_event, id) => clipboard.writeText(indexed(id).path));
   ipcMain.handle('window:fullscreen', () => { window.setFullScreen(!window.isFullScreen()); return window.isFullScreen(); });
   nativeTheme.themeSource = 'dark'; Menu.setApplicationMenu(null);
   window = new BrowserWindow({ width: 1440, height: 920, minWidth: 760, minHeight: 540,
     title: 'Lumen', backgroundColor: '#101114', autoHideMenuBar: true,
+    icon: path.join(__dirname, '..', 'assets', process.platform === 'win32' ? 'icon.ico' : 'icon.png'),
     webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true },
   });
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   window.webContents.on('will-navigate', event => event.preventDefault());
   window.webContents.session.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
+  window.once('ready-to-show', () => {
+    if (decoding) return;
+    cacheWorker = new Worker(path.join(__dirname, 'cache-worker.cjs'), { workerData: { cacheDir, cutoff: Date.now() } });
+    cacheWorker.on('error', () => {}); // Disposable cache maintenance must not interrupt browsing.
+  });
   if (dev) await window.loadURL('http://127.0.0.1:5173');
   else await window.loadFile(path.join(__dirname, '..', 'dist', 'index.html'));
   const argument = process.argv.find(arg => arg.startsWith('--folder='));
   if (argument) await enqueueOpen(argument.slice(9), true).catch(error => send({ type: 'error', message: error.message }));
 });
-app.on('window-all-closed', () => { worker?.terminate(); app.quit(); });
+app.on('window-all-closed', () => { worker?.terminate(); cacheWorker?.terminate(); app.quit(); });

@@ -31,6 +31,8 @@ _Click any screenshot for the full-size capture. [Photo credits and screenshot r
 
 Download [Lumen for Windows x64](https://github.com/JamesIV4/image-directory-viewer/releases/latest) and launch `Lumen-1.0.0-x64.exe`. The portable executable requires no installation or Node.js. It stores preferences and disposable caches in your Windows application data directory; your original images are never modified.
 
+The first launch of each build extracts its runtime once. Later launches reuse that cache for faster startup (about 315 ms in the [local startup measurements](docs/startup-performance.md)). Runtime files are cached in `%LOCALAPPDATA%\Lumen\runtime`; you can remove this folder while Lumen is closed to reclaim space, and the next launch will recreate the required files.
+
 To run from source, install Node.js 24 LTS, then run:
 
 ```powershell
@@ -61,6 +63,7 @@ npm.cmd start -- --folder="S:\Photos"
 - Click **Condense** in the collection header to replace the app header, toolbar, date panel, and folder-filter banner with a single compact bar. Your current folder, visible image count, and active-filter badge remain visible, while all filters stay applied. Hover the badge for the filter summary; click it or **Controls** to expand again. The layout preference is remembered. Ctrl+F or / expands the controls and focuses search.
 - Follow the clickable breadcrumbs to move up the folder structure. Relative paths appear on cards, and the full image path appears in the viewer and its details panel.
 - Use the checkbox beside any folder to quickly include or exclude that whole branch. Excluded folders stay in the tree so they are easy to restore. You can include an individual subfolder inside an excluded parent; partially included branches show a mixed checkbox. Changing a parent's checkbox applies to its whole subtree. Counts in the tree reflect included images. **Include all folders** clears the folder filters. These filters follow you as you navigate or refresh the current library and reset when you open a different root folder. Original files and the index are unaffected.
+- **Include folders** and **Exclude folders** accept comma-separated folder names or glob patterns, for example `Photos, Screenshots` and `**/Cache, Thumbnails`. Names match at any depth; use `./Photos` to match only the branch directly under the opened root. Patterns support `*`, `**`, `?`, character ranges such as `[1-3]`, and alternatives such as `{Photos,Scans}`. Matching branches include their descendants. An empty Include field allows every folder; a nonempty one limits the view to matching branches, including hiding root images unless you include `.`. Exclusions take precedence, and checkbox filters still apply. Matching ignores case and accepts either slash style. Both fields apply live, update folder counts, and are remembered across refreshes, folders, and app restarts. **Include all folders** clears both fields and the checkbox filters.
 - Turn off **Include root images** to hide photos directly in the root while keeping subfolder photos. When browsing a subfolder, **Include folder images** does the same for that folder's direct images. Subfolder inclusion is controlled separately.
 - Drag the sidebar's right edge to resize it; its width is remembered. Double-click the edge to reset, or focus the divider and use Left/Right, Home, or End.
 - Right-click an image in any view for **Open image**, **Reveal in File Explorer**, **Copy image path**, **Browse this folder**, **Exclude images in this folder** (direct images only), or **Exclude folder and subfolders**. The context-menu key or Shift+F10 also opens these actions. All exclusion actions filter the view without changing files.
@@ -103,7 +106,7 @@ Directory links and junctions are skipped to avoid cycles and traversal outside 
 - Cached indexes appear when reopening a folder, then a fresh scan reconciles changed and removed files. Index snapshots are stored per root; they are caches rather than a live filesystem watcher.
 - [TanStack Virtual](https://tanstack.com/virtual/latest/docs/introduction) renders visible rows with a small buffer. Both the image collection and folder tree are virtualized.
 - [Sharp](https://sharp.pixelplumbing.com/) generates orientation-correct, aspect-preserving WebP thumbnails only when requested. Four decoding jobs run at a time, with shared requests deduplicated. BMP decoding uses `bmp-js` in a separate worker.
-- File path, size, and modification time identify cached images. Changed files get new thumbnail keys. Thumbnails live on disk across sessions; an oldest-first cleanup applies a 2 GiB soft cap at startup. A session can exceed the cap until the next launch. Index snapshots are separate from that cap.
+- File path, size, and modification time identify cached images. Changed files get new thumbnail keys. Thumbnails live on disk across sessions; an oldest-first cleanup attempts a 2 GiB soft cap in the background after the window opens. Cleanup stops when image browsing begins, so it cannot interrupt image loading. A session can exceed the cap until a later idle launch. Index snapshots are separate from that cap.
 - [react-zoom-pan-pinch](https://github.com/BetterTyped/react-zoom-pan-pinch) supplies cursor-centered wheel zoom, pinch gestures, and panning. Originals are loaded separately from thumbnail previews.
 - The renderer accesses indexed image IDs through a custom protocol and a narrow preload API. Node integration is disabled, context isolation and sandboxing are enabled, and navigation and external windows are blocked.
 
@@ -116,8 +119,15 @@ npm.cmd test          # Indexing, cache, orientation, TIFF/BMP decoding, error h
 npm.cmd run test:e2e  # Build + real Electron UI checks; no browser download required
 npm.cmd run dist      # Windows x64 portable executable in release/
 npm.cmd run pack      # Unpacked desktop application in release/
+npm.cmd run benchmark:startup -- release/Lumen-1.0.0-x64.exe 6  # Launch-to-usable-window timing
 ```
 
 The UI tests generate disposable fixtures in `.test-data/`, use a separate app profile, and save screenshots in `test-results/`. They check recursive filtering, breadcrumbs, all views, virtualized rendering, search, TIFF originals, zoom limits, nearest-neighbor toggling, corrupt files, refresh reconciliation, and an 800×600 window. Electron's native folder picker and actual hardware gestures should also be checked manually.
 
+Use `npm.cmd run dist -- --publish never` to produce the uploadable `release/Lumen-<version>-x64.exe` and its `.sha256` checksum. This command includes the runtime-cache launcher; calling electron-builder directly produces its standard portable launcher instead. ZIP compression reduces first-launch extraction time at the cost of a larger download.
+
+**Packaged build versions:** `dist` and `pack` automatically increment the patch number once per new Git commit (for example, `1.0.0` → `1.0.1`) and update both `package.json` and `package-lock.json`. Repeating either command for the same commit reuses its version, even if uncommitted files changed or packaging previously failed. Ordinary `build`, development, and test runs do not change the version. The ignored `.packaged-build.json` file remembers the last packaged commit and version for this checkout; keep it to preserve repeat-build detection. A fresh checkout without that file reserves a new patch version on its first packaged build. Packaging requires a Git checkout with at least one commit.
+
 Source layout: `electron/` contains filesystem and native desktop services, `src/` contains the UI, and `tests/` contains backend and Electron integration tests.
+
+The desktop icon uses Lumen's purple aperture mark. Edit `assets/icon.svg`, then run `npm.cmd run icons` to regenerate the checked-in PNG and multi-size Windows ICO. Both development windows and packaged executables use these assets. Windows packaging embeds the icon and app metadata while keeping code signing disabled. The aperture geometry comes from Lucide; its license is in `assets/lucide-LICENSE`.

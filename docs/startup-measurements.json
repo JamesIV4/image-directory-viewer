@@ -1,0 +1,41 @@
+{
+  "metric": "EXE spawn to visible Open an image folder button plus two animation frames",
+  "environment": { "platform": "Windows x64", "osDiskCacheFlushed": false, "isolatedProfile": true, "includesCDPObservationOverhead": true },
+  "baselinePortable": {
+    "measuredAt": "2026-10-01T12:58:15.783Z",
+    "exeBytes": 107461978,
+    "samples": [
+      { "run": 1, "debugReadyMs": 16564, "readyMs": 16708 },
+      { "run": 2, "debugReadyMs": 16335, "readyMs": 16510 },
+      { "run": 3, "debugReadyMs": 16158, "readyMs": 16352 }
+    ],
+    "allRunsMedianMs": 16510,
+    "subsequentMedianMs": 16431
+  },
+  "baselineUnpacked": {
+    "measuredAt": "2026-10-01T12:59:38.472Z",
+    "samples": [
+      { "run": 1, "debugReadyMs": 865, "readyMs": 1297 },
+      { "run": 2, "debugReadyMs": 143, "readyMs": 265 },
+      { "run": 3, "debugReadyMs": 141, "readyMs": 262 }
+    ],
+    "allRunsMedianMs": 265,
+    "subsequentMedianMs": 264
+  },
+  "optimizedPortable": {
+    "measuredAt": "2026-10-01T13:06:33.162Z",
+    "exeBytes": 170246156,
+    "exeSha256": "7c807d1e9c287d03aa76343c69194000d3ff708dbf158c6625961864dc9a9327",
+    "firstRunExtractedRuntime": true,
+    "samples": [
+      { "run": 1, "debugReadyMs": 4409, "readyMs": 4676 },
+      { "run": 2, "debugReadyMs": 185, "readyMs": 320 },
+      { "run": 3, "debugReadyMs": 133, "readyMs": 315 },
+      { "run": 4, "debugReadyMs": 193, "readyMs": 327 },
+      { "run": 5, "debugReadyMs": 177, "readyMs": 313 },
+      { "run": 6, "debugReadyMs": 181, "readyMs": 308 }
+    ],
+    "allRunsMedianMs": 318,
+    "subsequentMedianMs": 315
+  }
+}
