@@ -1,5 +1,7 @@
 const { contextBridge, ipcRenderer, webUtils } = require('electron');
 contextBridge.exposeInMainWorld('lumen', {
+  sharingState: () => ipcRenderer.invoke('sharing:state'),
+  setSharing: active => ipcRenderer.invoke('sharing:set', active),
   getState: () => ipcRenderer.invoke('library:state'),
   openFolder: path => ipcRenderer.invoke('library:open', path),
   rescan: () => ipcRenderer.invoke('library:rescan'),

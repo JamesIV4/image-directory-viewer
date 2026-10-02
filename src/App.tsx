@@ -2,6 +2,7 @@ import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } f
 import { Aperture, ArrowDownWideNarrow, ArrowUpWideNarrow, Check, ChevronRight, FolderOpen, Folders, Grid2X2, Image, LayoutGrid, List, LoaderCircle, PanelLeftClose, PanelLeftOpen, RefreshCw, Search, X, Keyboard, CircleAlert, Copy, CornerDownLeft, CalendarClock, ChevronsUp, ChevronsDown, ListFilter } from 'lucide-react';
 import Library, { FolderTree, type View } from './Library';
 import Viewer from './Viewer';
+import Sharing from './Sharing';
 import { rootName, type ImageItem, type Folder, type Snapshot } from './types';
 import { createFolderPatternFilter, splitFolderPatterns, folderIncluded, setBranchIncluded, type FolderRules } from './folder-filter';
 import ImageContextMenu from './ImageContextMenu';
@@ -229,7 +230,7 @@ export default function App() {
     onDrop={event => { event.preventDefault(); setDragging(false); const file = event.dataTransfer.files[0]; if (file) void open(window.lumen.droppedPath(file)); }}>
     <header className="app-header" inert={viewer || help || showWarnings}>
       <div className="brand"><span className="brand-icon"><Aperture size={23} strokeWidth={1.7} /></span><strong>Lumen</strong><span className="brand-divider" /><span className="brand-description">IMAGE BROWSER</span></div>
-      <div className="header-actions"><span className="local-badge"><span />Local & private</span><button className="button primary" onClick={() => void open()}><FolderOpen size={16} />Open folder<kbd>Ctrl O</kbd></button></div>
+      <div className="header-actions"><Sharing /><span className="local-badge"><span />Local & private</span><button className="button primary" onClick={() => void open()}><FolderOpen size={16} />Open folder<kbd>Ctrl O</kbd></button></div>
     </header>
     <aside id="folder-sidebar" className="sidebar" inert={viewer || help || showWarnings}>
       <div className="sidebar-label"><span className="eyebrow">LIBRARY</span><button className="icon-button" title="Hide sidebar" aria-label="Hide sidebar" onClick={() => setSidebar(false)}><PanelLeftClose size={16} /></button></div>

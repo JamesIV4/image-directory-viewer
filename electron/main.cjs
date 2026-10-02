@@ -5,6 +5,8 @@ const { pathToFileURL } = require('node:url');
 const { Worker } = require('node:worker_threads');
 const crypto = require('node:crypto');
 const { ImageService } = require('./images.cjs');
+const { SharingService } = require('./sharing.cjs');
+let sharing;
 
 if (process.platform === 'win32') app.setAppUserModelId('com.jamesiv4.image-directory-viewer');
 if (process.env.LUMEN_TEST_DATA) app.setPath('userData', process.env.LUMEN_TEST_DATA);
@@ -60,6 +62,10 @@ app.whenReady().then(async () => {
   try { const data = JSON.parse(await fs.readFile(settingsFile(), 'utf8')); recent = (data.recent || []).filter(p => typeof p === 'string').slice(0, 8); } catch {}
   const cacheDir = path.join(app.getPath('userData'), 'thumbnails');
   service = new ImageService(cacheDir);
+  const libraryState = () => ({ root, recent, scanning, snapshot: snapshot || (root ? { root, items: [...items.values()], folders: [], warnings: [], scannedAt: 0 } : null), generation });
+  sharing = new SharingService({ state: libraryState, indexed, service, beforeImages, staticDir: path.join(__dirname, '..', 'dist', 'remote') });
+  ipcMain.handle('sharing:state', () => sharing.status());
+  ipcMain.handle('sharing:set', (_event, active) => active === true ? sharing.start() : sharing.stop());
   protocol.handle('lumen', async request => {
     try {
       const url = new URL(request.url), id = url.pathname.slice(1);
@@ -115,4 +121,4 @@ app.whenReady().then(async () => {
   const argument = process.argv.find(arg => arg.startsWith('--folder='));
   if (argument) await enqueueOpen(argument.slice(9), true).catch(error => send({ type: 'error', message: error.message }));
 });
-app.on('window-all-closed', () => { worker?.terminate(); cacheWorker?.terminate(); app.quit(); });
+app.on('window-all-closed', () => { void sharing?.stop(); worker?.terminate(); cacheWorker?.terminate(); app.quit(); });

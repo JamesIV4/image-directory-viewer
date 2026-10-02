@@ -55,6 +55,16 @@ npm.cmd start -- --folder="S:\Photos"
 
 ## Browsing
 
+### View from your phone or another computer
+
+Open the [Lumen Remote PWA](https://jamesiv4.github.io/image-directory-viewer/) in current Chrome or Edge. In the desktop app, open your image folder, click **Share on network**, then **Start sharing**. Enter the displayed PC address and pairing key in the PWA and allow local-network access when prompted. Both devices must be on the same Wi-Fi/LAN, and Lumen must stay open. If Windows prompts for firewall access, allow Lumen on **private networks**. No port forwarding is needed.
+
+The mobile gallery supports folder browsing, filename/path search, thumbnails, and original image viewing with previous/next buttons. It shares every indexed image under the currently opened root, independently of desktop filters; changing that root changes the shared library. Refresh in the PWA reloads the current index; refresh on the PC to pick up filesystem changes. It cannot select PC folders, modify files, or invoke Explorer. Pages hosts only the interface; image requests go directly to your PC. The pairing key is kept only for the current browser session. **Stop sharing** disconnects clients; restarting sharing generates a new key. Sharing is disabled each time Lumen starts.
+
+Use the browser's install menu or the **Install** button, when offered, to add the HTTPS PWA to your home screen. Its interface works offline; viewing images requires your PC to be reachable. Photos and library responses are never stored in the PWA's offline cache. Sharing uses HTTP on port `47831`, so use a trusted private network. Browsers that block HTTPS-to-LAN HTTP requests, including unsupported mobile browsers, can browse by opening the displayed PC address directly; that HTTP page is a browser fallback, not an installable PWA. Guest Wi-Fi isolation, VPN routing, denied network permissions, and firewall rules can prevent connection. The original desktop releases predating this feature need to be replaced with a build containing it.
+
+`npm.cmd run build:pwa` produces the standalone site in `dist-pwa/` and a copy for the desktop server in `dist/remote/`. The [Pages workflow](.github/workflows/pages.yml) builds, tests the sharing API, and deploys the static PWA on pushes to `main` or manual runs. GitHub Pages must use **GitHub Actions** as its publishing source.
+
 - **All images** shows the entire recursively indexed collection. The folder tree filters to any branch; **Include subfolders** switches between that branch and just the selected folder's files.
 - **Gallery**, **Compact**, **Details**, and **Grouped by folder** views share the same search and filters. Adjust thumbnail size with the slider.
 - Search filenames and relative paths, filter by extension, and sort by name, path, modified date, or file size in either direction.

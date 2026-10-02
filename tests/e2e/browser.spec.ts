@@ -140,8 +140,7 @@ test('original image fit, 1:1, smooth wheel zoom, navigation, and details', asyn
   expect(initialScale).toBeGreaterThan(0); expect(initialScale).toBeLessThan(100);
   await page.getByRole('button', { name: '1:1', exact: true }).click();
   await expect(page.locator('.zoom-value')).toHaveText('100%');
-  const imageBox = await page.locator('.original-image').boundingBox();
-  expect(Math.round(imageBox!.width)).toBe(1800);
+  await expect.poll(async () => Math.round((await page.locator('.original-image').boundingBox())!.width)).toBe(1800);
   await page.getByRole('button', { name: 'Zoom in', exact: true }).click();
   await expect.poll(async () => Number((await page.locator('.zoom-value').innerText()).replace('%', ''))).toBeGreaterThan(100);
   await page.getByRole('button', { name: 'Fit', exact: true }).click();

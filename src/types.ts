@@ -13,6 +13,8 @@ export type IndexEvent = { generation: number } & (
 declare global {
   interface Window {
     lumen: {
+      sharingState(): Promise<{ active: boolean; token: string; addresses: string[] }>;
+      setSharing(active: boolean): Promise<{ active: boolean; token: string; addresses: string[] }>;
       getState(): Promise<{ root: string; recent: string[]; scanning: boolean; snapshot: Snapshot | null; generation: number }>;
       openFolder(path?: string): Promise<{ root: string; recent: string[] } | null>;
       rescan(): Promise<unknown>; cancel(): Promise<unknown>;
