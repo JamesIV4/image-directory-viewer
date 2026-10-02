@@ -35,9 +35,9 @@ export default function App() {
   const condensed = controlsCollapsed && !!root;
   useEffect(() => { localStorage.setItem('lumen.controlsCollapsed', JSON.stringify(controlsCollapsed)); }, [controlsCollapsed]);
   const [view, setView] = useState<View>(saved('lumen.view', 'grid'));
-  const [size, setSize] = useState<number>(saved('lumen.size', 230));
+  const [size, setSize] = useState<number>(saved('lumen.size', window.lumen.remote && window.innerWidth <= 600 ? 150 : 230));
   const [sort, setSort] = useState<string>(saved('lumen.sort', 'name'));
-  const [descending, setDescending] = useState(false), [sidebar, setSidebar] = useState(true);
+  const [descending, setDescending] = useState(false), [sidebar, setSidebar] = useState(() => !window.lumen.remote || window.innerWidth > 600);
   const [sidebarWidth, setSidebarWidth] = useState<number>(saved('lumen.sidebarWidth', 242));
   const [resizingSidebar, setResizingSidebar] = useState(false);
   const [contextMenu, setContextMenu] = useState<{ item: ImageItem; x: number; y: number } | null>(null);
@@ -227,10 +227,10 @@ export default function App() {
     style={{ gridTemplateColumns: `${sidebar ? sidebarWidth : 0}px minmax(0,1fr)` }}
     onDragOver={event => { event.preventDefault(); if (event.dataTransfer.types.includes('Files')) setDragging(true); }}
     onDragLeave={event => { if (!event.currentTarget.contains(event.relatedTarget as Node)) setDragging(false); }}
-    onDrop={event => { event.preventDefault(); setDragging(false); const file = event.dataTransfer.files[0]; if (file) void open(window.lumen.droppedPath(file)); }}>
+    onDrop={event => { event.preventDefault(); setDragging(false); const file = event.dataTransfer.files[0]; if (file) { if (window.lumen.remote) setError('Use Open folder to choose a folder on your PC.'); else void open(window.lumen.droppedPath(file)); } }}>
     <header className="app-header" inert={viewer || help || showWarnings}>
       <div className="brand"><span className="brand-icon"><Aperture size={23} strokeWidth={1.7} /></span><strong>Lumen</strong><span className="brand-divider" /><span className="brand-description">IMAGE BROWSER</span></div>
-      <div className="header-actions"><Sharing /><span className="local-badge"><span />Local & private</span><button className="button primary" onClick={() => void open()}><FolderOpen size={16} />Open folder<kbd>Ctrl O</kbd></button></div>
+      <div className="header-actions">{window.lumen.remote ? <button onClick={() => window.lumen.remote?.disconnect()}>Disconnect</button> : <Sharing />}<span className="local-badge"><span />{window.lumen.remote ? 'Home network' : 'Local & private'}</span><button className="button primary" title={window.lumen.remote ? 'Choose a folder on your PC' : undefined} onClick={() => void open()}><FolderOpen size={16} />Open folder<kbd>Ctrl O</kbd></button></div>
     </header>
     <aside id="folder-sidebar" className="sidebar" inert={viewer || help || showWarnings}>
       <div className="sidebar-label"><span className="eyebrow">LIBRARY</span><button className="icon-button" title="Hide sidebar" aria-label="Hide sidebar" onClick={() => setSidebar(false)}><PanelLeftClose size={16} /></button></div>

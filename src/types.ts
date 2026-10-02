@@ -13,6 +13,8 @@ export type IndexEvent = { generation: number } & (
 declare global {
   interface Window {
     lumen: {
+      remote?: { disconnect(): void };
+      mediaUrl?(kind: 'thumb' | 'image', id: string): string;
       sharingState(): Promise<{ active: boolean; token: string; addresses: string[] }>;
       setSharing(active: boolean): Promise<{ active: boolean; token: string; addresses: string[] }>;
       getState(): Promise<{ root: string; recent: string[]; scanning: boolean; snapshot: Snapshot | null; generation: number }>;
@@ -24,7 +26,7 @@ declare global {
     }
   }
 }
-export const thumbnail = (item: ImageItem) => `lumen://thumb/${item.id}`;
-export const original = (item: ImageItem) => `lumen://image/${item.id}`;
+export const thumbnail = (item: ImageItem) => window.lumen.mediaUrl?.('thumb', item.id) ?? `lumen://thumb/${item.id}`;
+export const original = (item: ImageItem) => window.lumen.mediaUrl?.('image', item.id) ?? `lumen://image/${item.id}`;
 export const bytes = (n: number) => n < 1024 ? `${n} B` : n < 1024 ** 2 ? `${(n / 1024).toFixed(1)} KB` : `${(n / 1024 ** 2).toFixed(1)} MB`;
 export const rootName = (path: string) => path.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || path;

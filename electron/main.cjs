@@ -63,7 +63,22 @@ app.whenReady().then(async () => {
   try { const data = JSON.parse(await fs.readFile(settingsFile(), 'utf8')); recent = (data.recent || []).filter(p => typeof p === 'string').slice(0, 8); sharingEnabled = data.sharingEnabled !== false; } catch {}
   const cacheDir = path.join(app.getPath('userData'), 'thumbnails');
   service = new ImageService(cacheDir);
-  const libraryState = () => ({ root, recent, scanning, snapshot: snapshot || (root ? { root, items: [...items.values()], folders: [], warnings: [], scannedAt: 0 } : null), generation });
+  const libraryState = () => {
+    let data = snapshot;
+    if (root && (scanning || !data)) {
+      const folders = new Map([['', { path: '', name: path.basename(root), count: 0, ownCount: 0 }]]);
+      for (const item of items.values()) {
+        const parts = item.folder ? item.folder.split('/') : [];
+        for (let i = 0; i <= parts.length; i++) {
+          const folder = parts.slice(0, i).join('/');
+          if (!folders.has(folder)) folders.set(folder, { path: folder, name: parts[i - 1], count: 0, ownCount: 0 });
+          const entry = folders.get(folder); entry.count++; if (i === parts.length) entry.ownCount++;
+        }
+      }
+      data = { root, items: [...items.values()], folders: [...folders.values()], warnings: [], scannedAt: 0 };
+    }
+    return { root, recent, scanning, snapshot: data, generation };
+  };
   sharing = new SharingService({ state: libraryState, indexed, service, beforeImages, staticDir: path.join(__dirname, '..', 'dist', 'remote'), tokenFile: path.join(app.getPath('userData'), 'pairing-key.txt') });
   if (sharingEnabled) await sharing.start().catch(error => console.error('Could not start network sharing:', error.message));
   ipcMain.handle('sharing:state', () => sharing.status());
@@ -83,27 +98,34 @@ app.whenReady().then(async () => {
       return net.fetch(pathToFileURL(file).toString());
     } catch { return new Response('Image unavailable or unsupported', { status: 404 }); }
   });
-  ipcMain.handle('library:state', () => ({ root, recent, scanning, snapshot: snapshot || (root ? { root, items: [...items.values()], folders: [], warnings: [], scannedAt: 0 } : null), generation }));
+  ipcMain.handle('library:state', libraryState);
   // Serialize open/refresh requests so rapid folder switches cannot interleave workers.
   let opening = Promise.resolve();
   const enqueueOpen = (folder, cache) => {
     const result = opening.then(() => openRoot(folder, cache));
     opening = result.catch(() => {}); return result;
   };
-  ipcMain.handle('library:open', async (_event, folder) => {
+  const chooseFolder = async folder => {
     if (!folder) {
       const result = await dialog.showOpenDialog(window, { title: 'Open an image folder', properties: ['openDirectory'] });
       if (result.canceled) return null; folder = result.filePaths[0];
     }
     return enqueueOpen(folder, true);
-  });
-  ipcMain.handle('library:rescan', () => root ? enqueueOpen(root, true) : null);
-  ipcMain.handle('library:cancel', async () => {
+  };
+  ipcMain.handle('library:open', (_event, folder) => chooseFolder(folder));
+  const rescan = () => root ? enqueueOpen(root, true) : null;
+  ipcMain.handle('library:rescan', rescan);
+  const cancel = async () => {
     if (worker && scanning) {
-      await worker.terminate(); worker = null; scanning = false;
-      send({ type: 'complete', data: { root, items: [...items.values()], folders: snapshot?.folders || [], warnings: ['Scan stopped. Refresh to finish indexing.'], scannedAt: Date.now(), version: 1 } });
+      await worker.terminate(); worker = null;
+      const stopped = libraryState().snapshot;
+      scanning = false;
+      snapshot = { ...stopped, warnings: ['Scan stopped. Refresh to finish indexing.'], scannedAt: Date.now(), version: 1 };
+      send({ type: 'complete', data: snapshot });
     }
-  });
+  };
+  sharing.actions = { open: chooseFolder, rescan, cancel, reveal: id => shell.showItemInFolder(indexed(id).path) };
+  ipcMain.handle('library:cancel', cancel);
   ipcMain.handle('image:metadata', async (_event, id) => { const item = indexed(id); await beforeImages(); return service.metadata(item); });
   ipcMain.handle('image:reveal', (_event, id) => shell.showItemInFolder(indexed(id).path));
   ipcMain.handle('image:copy', (_event, id) => clipboard.writeText(indexed(id).path));
