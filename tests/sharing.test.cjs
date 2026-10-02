@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
+const http = require('node:http');
 const { SharingService } = require('../electron/sharing.cjs');
 test('sharing authenticates, limits origins, paginates and serves only indexed files inside the root', async t => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'lumen-share-'));
@@ -15,6 +16,16 @@ test('sharing authenticates, limits origins, paginates and serves only indexed f
   assert.match(status.token, /^[A-Z0-9]{5}$/);
   const base = `http://127.0.0.1:${status.port}`, headers = { Authorization: `Bearer ${status.token}` };
   assert.equal((await fetch(base + '/api/library')).status, 401);
+  const discovery = await fetch(base + '/api/discover', { headers: { Origin: 'https://jamesiv4.github.io' } });
+  assert.equal(discovery.headers.get('access-control-allow-origin'), 'https://jamesiv4.github.io');
+  assert.equal(discovery.headers.get('cache-control'), 'no-store');
+  assert.deepEqual(await discovery.json(), { service: 'lumen', version: 1, token: status.token });
+  assert.equal((await fetch(base + '/api/discover', { headers: { Origin: 'https://evil.example' } })).status, 403);
+  const withHost = host => new Promise((resolve, reject) => {
+    http.get(base + '/api/discover', { headers: { Host: host } }, response => { response.resume(); resolve(response.statusCode); }).on('error', reject);
+  });
+  assert.equal(await withHost('evil.example'), 403);
+  assert.equal(await withHost(`lumen.local:${status.port}`), 200);
   assert.equal((await fetch(base + '/api/library', { headers: { Authorization: `Bearer ${status.token.toLowerCase()}` } })).status, 200);
   assert.equal((await fetch(base + '/api/library', { headers: { ...headers, Origin: 'https://evil.example' } })).status, 403);
   const response = await fetch(base + '/api/library', { headers: { ...headers, Origin: 'https://jamesiv4.github.io' } });

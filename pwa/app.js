@@ -1,5 +1,6 @@
 const $ = id => document.getElementById(id);
 let base = '', token = '', items = [], selected = 0, generation, version = 0, controller = new AbortController();
+let automatic = true, connectionAttempt = 0, reconnectTimer, recovering = false;
 const blobs = new Set();
 function clearFull() { const url = $('full').getAttribute('src'); if (url?.startsWith('blob:')) { URL.revokeObjectURL(url); blobs.delete(url); } $('full').removeAttribute('src'); }
 const message = text => { $('status').textContent = text; };
@@ -46,6 +47,7 @@ async function load(append = false) {
     message('');
     try { localStorage.setItem('lumen.remote', JSON.stringify({ base, token })); sessionStorage.removeItem('lumen.remote'); } catch { /* Storage may be disabled; the live connection still works. */ }
   } catch (error) {
+    if (current === version && error.name !== 'AbortError') recovering = true;
     if (error instanceof TypeError) message('Cannot reach your PC. Check the address, Wi-Fi, sharing and Windows firewall. Allow local-network access in Chrome/Edge. If blocked, open the PC address directly.');
     else failure(error);
     throw error;
@@ -60,17 +62,62 @@ async function view(index) {
   await image(item.id, 'image', $('full'), version);
 }
 $('address').value = location.protocol === 'http:' ? location.origin : '';
-let remembered = false;
 try {
   const saved = JSON.parse(localStorage.getItem('lumen.remote') || sessionStorage.getItem('lumen.remote'));
-  if (saved && typeof saved.base === 'string' && /^[a-z0-9]{5}$/i.test(saved.token)) { $('address').value = saved.base; $('key').value = saved.token; remembered = true; }
+  if (saved && typeof saved.base === 'string' && /^[a-z0-9]{5}$/i.test(saved.token)) { $('address').value = saved.base; $('key').value = saved.token; }
 } catch { /* Start unpaired if saved data or browser storage is unavailable. */ }
+async function discover(address) {
+  const response = await fetch(address + '/api/discover', { cache: 'no-store', signal: AbortSignal.timeout(3000) });
+  if (!response.ok) throw new Error('Lumen unavailable');
+  const data = await response.json();
+  if (data.service !== 'lumen' || data.version !== 1 || !/^[A-Z0-9]{5}$/.test(data.token)) throw new Error('Lumen unavailable');
+  return data.token;
+}
+async function findLumen() {
+  if (!automatic) return;
+  const attempt = ++connectionAttempt;
+  try {
+    // Keep an active connection; rediscover when the PC goes away or changes address.
+    if (!$('collection').hidden) {
+      try {
+        const key = await discover(base);
+        if (!automatic || attempt !== connectionAttempt) return;
+        if (recovering || key !== token) { token = key; $('key').value = key; await load(); recovering = false; }
+        return;
+      } catch {
+        if (!automatic || attempt !== connectionAttempt) return;
+        recovering = true;
+        message('Connection lost. Looking for Lumen on your network…');
+      }
+    } else message('Looking for Lumen on your network…');
+    const candidates = [...new Set([base, $('address').value, 'http://lumen.local:47831', 'http://127.0.0.1:47831'].filter(Boolean))];
+    for (const address of candidates) {
+      try {
+        const key = await discover(address);
+        if (!automatic || attempt !== connectionAttempt) return;
+        base = address; token = key;
+        $('address').value = base; $('key').value = token;
+        await load();
+        recovering = false;
+        return;
+      } catch { if (!automatic || attempt !== connectionAttempt) return; }
+    }
+    message('Looking for Lumen. Keep your PC on the same Wi-Fi with sharing enabled and allow local-network access. You can also enter the PC address below.');
+  } finally {
+    if (automatic && attempt === connectionAttempt) reconnectTimer = setTimeout(() => void findLumen(), 5000);
+  }
+}
+$('find').onclick = () => { automatic = true; connectionAttempt++; clearTimeout(reconnectTimer); void findLumen(); };
 $('pair').onsubmit = async event => {
   event.preventDefault();
+  automatic = false; connectionAttempt++; clearTimeout(reconnectTimer);
   try {
     const url = new URL($('address').value);
     if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.pathname !== '/' || url.search || url.hash) throw new Error('Enter just the PC address, for example http://192.168.1.10:47831.');
-    base = url.origin; token = $('key').value.trim().toUpperCase(); message('Connecting…'); await load();
+    base = url.origin; token = $('key').value.trim().toUpperCase(); message('Connecting…');
+    if (!token) { token = await discover(base); $('key').value = token; }
+    await load();
+    automatic = true; reconnectTimer = setTimeout(() => void findLumen(), 5000);
   } catch (error) { if (!(error instanceof TypeError)) failure(error); }
 };
 $('refresh').onclick = () => { void load().catch(() => {}); };
@@ -78,7 +125,7 @@ $('more').onclick = () => { void load(true).catch(() => {}); };
 let searchTimer;
 $('search').oninput = () => { clearTimeout(searchTimer); searchTimer = setTimeout(() => { void load().catch(() => {}); }, 250); };
 $('folder').onchange = () => { void load().catch(() => {}); };
-$('disconnect').onclick = () => { clearTimeout(searchTimer); release(); observer.disconnect(); token = ''; items = []; try { localStorage.removeItem('lumen.remote'); sessionStorage.removeItem('lumen.remote'); } catch {} $('key').value = ''; $('gallery').replaceChildren(); $('collection').hidden = true; $('connect').hidden = false; $('disconnect').hidden = true; message('Disconnected.'); };
+$('disconnect').onclick = () => { automatic = false; connectionAttempt++; clearTimeout(reconnectTimer); clearTimeout(searchTimer); release(); observer.disconnect(); base = ''; token = ''; items = []; try { localStorage.removeItem('lumen.remote'); sessionStorage.removeItem('lumen.remote'); } catch {} $('key').value = ''; $('gallery').replaceChildren(); $('collection').hidden = true; $('connect').hidden = false; $('disconnect').hidden = true; message('Disconnected.'); };
 $('close').onclick = () => $('viewer').close();
 $('viewer').addEventListener('close', () => { clearFull(); $('full').dataset.id = ''; });
 $('previous').onclick = () => { void view(selected - 1); }; $('next').onclick = () => { void view(selected + 1); };
@@ -88,4 +135,4 @@ window.addEventListener('beforeinstallprompt', event => { event.preventDefault()
 $('install').onclick = async () => { await installPrompt?.prompt(); $('install').hidden = true; };
 if ('serviceWorker' in navigator && window.isSecureContext) navigator.serviceWorker.register('./sw.js').catch(() => {});
 
-if (remembered) $('pair').requestSubmit();
+void findLumen();

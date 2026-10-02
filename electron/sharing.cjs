@@ -5,6 +5,7 @@ const { pipeline } = require('node:stream/promises');
 const path = require('node:path');
 const os = require('node:os');
 const crypto = require('node:crypto');
+const { Bonjour } = require('bonjour-service');
 
 const PAGE_ORIGIN = 'https://jamesiv4.github.io';
 const mime = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.webmanifest': 'application/manifest+json', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.gif': 'image/gif', '.avif': 'image/avif', '.bmp': 'image/bmp' };
@@ -35,17 +36,32 @@ class SharingService {
     server.requestTimeout = 30000; server.headersTimeout = 10000;
     await new Promise((resolve, reject) => { server.once('error', reject); server.listen(port, host, resolve); });
     this.server = server;
+    // Browsers can resolve a known .local host, but cannot browse DNS-SD themselves.
+    if (host === '0.0.0.0') {
+      try {
+        this.discovery = new Bonjour({}, error => console.error('Lumen discovery:', error.message));
+        this.discovery.publish({ name: 'Lumen', host: 'lumen.local', type: 'http', port: this.status().port, disableIPv6: true });
+      } catch (error) {
+        this.discovery?.destroy(); this.discovery = null;
+        console.error('Could not advertise Lumen:', error.message);
+      }
+    }
     return this.status();
   }
   async stop() {
     const server = this.server; this.server = null;
+    if (this.discovery) {
+      const discovery = this.discovery; this.discovery = null;
+      await new Promise(resolve => discovery.unpublishAll(resolve));
+      discovery.destroy();
+    }
     if (server) { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }
     return this.status();
   }
   async handle(req, res) {
-    // Reject DNS rebinding; accept only IP literal hosts or localhost.
+    // Accept our advertised hostname as well as direct IP connections.
     const host = new URL(`http://${req.headers.host}`).hostname;
-    if (!require('node:net').isIP(host) && host !== 'localhost') { res.writeHead(403); return res.end(); }
+    if (!require('node:net').isIP(host) && host !== 'localhost' && host !== 'lumen.local') { res.writeHead(403); return res.end(); }
     const origin = req.headers.origin;
     const allowed = !origin || origin === PAGE_ORIGIN || origin === `http://${req.headers.host}`;
     if (!allowed) { res.writeHead(403); return res.end(); }
@@ -63,6 +79,11 @@ class SharingService {
       const file = path.join(this.staticDir, name);
       res.setHeader('Content-Type', mime[path.extname(file)] || 'application/octet-stream');
       return res.end(await fs.readFile(file));
+    }
+    // Sharing explicitly permits automatic pairing for devices on this LAN.
+    if (url.pathname === '/api/discover') {
+      res.setHeader('Content-Type', 'application/json');
+      return res.end(JSON.stringify({ service: 'lumen', version: 1, token: this.token }));
     }
     const supplied = Buffer.from((req.headers.authorization || '').replace(/^Bearer ([a-z0-9]{5})$/i, (_match, key) => `Bearer ${key.toUpperCase()}`));
     const expected = Buffer.from(`Bearer ${this.token}`);
