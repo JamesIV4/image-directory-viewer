@@ -183,14 +183,30 @@ export default function App() {
     returnImage.current = selected;
     setViewer(false);
   }, [selected]);
-  useEffect(() => window.lumen.onNavigate?.(direction => {
-    if (help || showWarnings || contextMenu) return;
-    if (direction === 'back' && viewer) closeViewer();
-    else if (direction === 'forward' && !viewer && filtered.some(item => item.id === returnImage.current)) {
-      setSelected(returnImage.current);
-      setViewer(true);
-    }
-  }), [viewer, filtered, closeViewer, help, showWarnings, contextMenu]);
+  useEffect(() => {
+    const navigateView = (direction: 'back' | 'forward') => {
+      if (help || showWarnings || contextMenu) return;
+      if (direction === 'back' && viewer) closeViewer();
+      else if (direction === 'forward' && !viewer && filtered.some(item => item.id === returnImage.current)) {
+        setSelected(returnImage.current);
+        setViewer(true);
+      }
+    };
+    const sideButton = (event: MouseEvent) => {
+      if (event.button !== 3 && event.button !== 4) return;
+      // Capture before the zoom library's window mousedown listener starts a pan.
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      if (event.type === 'mouseup') navigateView(event.button === 3 ? 'back' : 'forward');
+    };
+    const events = ['mousedown', 'mouseup', 'auxclick'] as const;
+    for (const name of events) window.addEventListener(name, sideButton, true);
+    const unsubscribe = window.lumen.onNavigate?.(navigateView);
+    return () => {
+      for (const name of events) window.removeEventListener(name, sideButton, true);
+      unsubscribe?.();
+    };
+  }, [viewer, filtered, closeViewer, help, showWarnings, contextMenu]);
   useEffect(() => {
     const keydown = (event: KeyboardEvent) => {
       if (event.defaultPrevented || contextMenu || (event.target as HTMLElement).closest('[role="separator"], [role="slider"]')) return;

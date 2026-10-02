@@ -225,6 +225,39 @@ test('mouse back and forward return to the last detail image, and small images t
   await expect(page.locator('.viewer')).toHaveCount(0);
 });
 
+test('side mouse buttons navigate on release without panning, while left drag still pans', async () => {
+  await page.locator('.tree-label').filter({ hasText: 'Landscapes' }).click();
+  await page.locator('.image-card').first().click();
+  await expect(page.locator('.viewer-loading')).toHaveCount(0);
+  const name = await page.locator('.viewer-title strong').innerText();
+  const stage = (await page.locator('.viewer-stage').boundingBox())!;
+  const x = stage.x + stage.width / 2, y = stage.y + stage.height / 2;
+  const session = await page.context().newCDPSession(page);
+  const transform = () => page.locator('.zoom-content:visible').evaluate(element => getComputedStyle(element).transform);
+  const initial = await transform();
+  for (const button of ['forward', 'back'] as const) {
+    const buttons = button === 'back' ? 8 : 16;
+    await session.send('Input.dispatchMouseEvent', { type: 'mousePressed', button, buttons, x, y, clickCount: 1 });
+    await session.send('Input.dispatchMouseEvent', { type: 'mouseMoved', button, buttons, x: x + 80, y: y + 40 });
+    await expect(page.locator('.viewer-title strong')).toHaveText(name);
+    expect(await transform()).toBe(initial);
+    await session.send('Input.dispatchMouseEvent', { type: 'mouseReleased', button, buttons: 0, x: x + 80, y: y + 40, clickCount: 1 });
+    await expect(page.locator('.viewer')).toHaveCount(button === 'back' ? 0 : 1);
+  }
+  await session.send('Input.dispatchMouseEvent', { type: 'mousePressed', button: 'forward', buttons: 16, x, y, clickCount: 1 });
+  await session.send('Input.dispatchMouseEvent', { type: 'mouseReleased', button: 'forward', buttons: 0, x, y, clickCount: 1 });
+  await expect(page.locator('.viewer-title strong')).toHaveText(name);
+  await expect(page.locator('.original-image:visible')).toHaveCount(1);
+  const beforeDrag = await transform();
+  await page.mouse.move(x, y);
+  await page.mouse.down();
+  await page.mouse.move(x + 80, y + 40, { steps: 4 });
+  await page.mouse.up();
+  expect(await transform()).not.toBe(beforeDrag);
+  await session.detach();
+  await page.keyboard.press('Escape');
+});
+
 test('image navigation retains the original through decoding and skips stale loads without blank frames', async () => {
   await page.locator('.tree-label').filter({ hasText: 'Landscapes' }).click();
   await page.locator('.image-card').first().click();
