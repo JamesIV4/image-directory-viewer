@@ -13,6 +13,7 @@ if (process.env.LUMEN_TEST_DATA) app.setPath('userData', process.env.LUMEN_TEST_
 protocol.registerSchemesAsPrivileged([{ scheme: 'lumen', privileges: { standard: true, secure: true, supportFetchAPI: true } }]);
 let window, worker, cacheWorker, service, root = '', items = new Map(), snapshot = null, scanning = false, generation = 0;
 let recent = [];
+let sharingEnabled = true;
 let decoding = false, cacheMaintenance;
 async function beforeImages() {
   decoding = true;
@@ -23,7 +24,7 @@ async function beforeImages() {
 const dev = process.argv.includes('--dev');
 const send = event => { if (window && !window.isDestroyed()) window.webContents.send('library:event', { ...event, generation }); };
 const settingsFile = () => path.join(app.getPath('userData'), 'settings.json');
-const saveRecent = async () => fs.writeFile(settingsFile(), JSON.stringify({ recent })).catch(() => {});
+const saveRecent = async () => fs.writeFile(settingsFile(), JSON.stringify({ recent, sharingEnabled })).catch(() => {});
 
 async function openRoot(folder, useCache = true) {
   if (typeof folder !== 'string' || !path.isAbsolute(folder)) throw new Error('Choose an absolute folder path.');
@@ -59,13 +60,18 @@ function indexed(id) {
 
 app.whenReady().then(async () => {
   await fs.mkdir(app.getPath('userData'), { recursive: true });
-  try { const data = JSON.parse(await fs.readFile(settingsFile(), 'utf8')); recent = (data.recent || []).filter(p => typeof p === 'string').slice(0, 8); } catch {}
+  try { const data = JSON.parse(await fs.readFile(settingsFile(), 'utf8')); recent = (data.recent || []).filter(p => typeof p === 'string').slice(0, 8); sharingEnabled = data.sharingEnabled !== false; } catch {}
   const cacheDir = path.join(app.getPath('userData'), 'thumbnails');
   service = new ImageService(cacheDir);
   const libraryState = () => ({ root, recent, scanning, snapshot: snapshot || (root ? { root, items: [...items.values()], folders: [], warnings: [], scannedAt: 0 } : null), generation });
-  sharing = new SharingService({ state: libraryState, indexed, service, beforeImages, staticDir: path.join(__dirname, '..', 'dist', 'remote') });
+  sharing = new SharingService({ state: libraryState, indexed, service, beforeImages, staticDir: path.join(__dirname, '..', 'dist', 'remote'), tokenFile: path.join(app.getPath('userData'), 'pairing-key.txt') });
+  if (sharingEnabled) await sharing.start().catch(error => console.error('Could not start network sharing:', error.message));
   ipcMain.handle('sharing:state', () => sharing.status());
-  ipcMain.handle('sharing:set', (_event, active) => active === true ? sharing.start() : sharing.stop());
+  ipcMain.handle('sharing:set', async (_event, active) => {
+    const status = await (active === true ? sharing.start() : sharing.stop());
+    sharingEnabled = active === true; await saveRecent();
+    return status;
+  });
   protocol.handle('lumen', async request => {
     try {
       const url = new URL(request.url), id = url.pathname.slice(1);

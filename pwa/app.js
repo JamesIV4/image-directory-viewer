@@ -43,7 +43,8 @@ async function load(append = false) {
     $('count').textContent = `${data.total.toLocaleString()} images${data.scanning ? ' · PC is indexing…' : ''}`;
     $('more').hidden = items.length >= data.total;
     $('connect').hidden = true; $('collection').hidden = false; $('disconnect').hidden = false;
-    message(''); sessionStorage.setItem('lumen.remote', JSON.stringify({ base, token }));
+    message('');
+    try { localStorage.setItem('lumen.remote', JSON.stringify({ base, token })); sessionStorage.removeItem('lumen.remote'); } catch { /* Storage may be disabled; the live connection still works. */ }
   } catch (error) {
     if (error instanceof TypeError) message('Cannot reach your PC. Check the address, Wi-Fi, sharing and Windows firewall. Allow local-network access in Chrome/Edge. If blocked, open the PC address directly.');
     else failure(error);
@@ -59,13 +60,17 @@ async function view(index) {
   await image(item.id, 'image', $('full'), version);
 }
 $('address').value = location.protocol === 'http:' ? location.origin : '';
-try { const saved = JSON.parse(sessionStorage.getItem('lumen.remote')); if (saved) { $('address').value = saved.base; $('key').value = saved.token; } } catch { /* A fresh session starts unpaired. */ }
+let remembered = false;
+try {
+  const saved = JSON.parse(localStorage.getItem('lumen.remote') || sessionStorage.getItem('lumen.remote'));
+  if (saved && typeof saved.base === 'string' && /^[a-z0-9]{5}$/i.test(saved.token)) { $('address').value = saved.base; $('key').value = saved.token; remembered = true; }
+} catch { /* Start unpaired if saved data or browser storage is unavailable. */ }
 $('pair').onsubmit = async event => {
   event.preventDefault();
   try {
     const url = new URL($('address').value);
     if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.pathname !== '/' || url.search || url.hash) throw new Error('Enter just the PC address, for example http://192.168.1.10:47831.');
-    base = url.origin; token = $('key').value.trim(); message('Connecting…'); await load();
+    base = url.origin; token = $('key').value.trim().toUpperCase(); message('Connecting…'); await load();
   } catch (error) { if (!(error instanceof TypeError)) failure(error); }
 };
 $('refresh').onclick = () => { void load().catch(() => {}); };
@@ -73,7 +78,7 @@ $('more').onclick = () => { void load(true).catch(() => {}); };
 let searchTimer;
 $('search').oninput = () => { clearTimeout(searchTimer); searchTimer = setTimeout(() => { void load().catch(() => {}); }, 250); };
 $('folder').onchange = () => { void load().catch(() => {}); };
-$('disconnect').onclick = () => { clearTimeout(searchTimer); release(); observer.disconnect(); token = ''; items = []; sessionStorage.removeItem('lumen.remote'); $('key').value = ''; $('gallery').replaceChildren(); $('collection').hidden = true; $('connect').hidden = false; $('disconnect').hidden = true; message('Disconnected.'); };
+$('disconnect').onclick = () => { clearTimeout(searchTimer); release(); observer.disconnect(); token = ''; items = []; try { localStorage.removeItem('lumen.remote'); sessionStorage.removeItem('lumen.remote'); } catch {} $('key').value = ''; $('gallery').replaceChildren(); $('collection').hidden = true; $('connect').hidden = false; $('disconnect').hidden = true; message('Disconnected.'); };
 $('close').onclick = () => $('viewer').close();
 $('viewer').addEventListener('close', () => { clearFull(); $('full').dataset.id = ''; });
 $('previous').onclick = () => { void view(selected - 1); }; $('next').onclick = () => { void view(selected + 1); };
@@ -82,3 +87,5 @@ let installPrompt;
 window.addEventListener('beforeinstallprompt', event => { event.preventDefault(); installPrompt = event; $('install').hidden = false; });
 $('install').onclick = async () => { await installPrompt?.prompt(); $('install').hidden = true; };
 if ('serviceWorker' in navigator && window.isSecureContext) navigator.serviceWorker.register('./sw.js').catch(() => {});
+
+if (remembered) $('pair').requestSubmit();

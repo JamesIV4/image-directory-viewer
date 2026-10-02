@@ -9,8 +9,8 @@ const crypto = require('node:crypto');
 const PAGE_ORIGIN = 'https://jamesiv4.github.io';
 const mime = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.webmanifest': 'application/manifest+json', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.gif': 'image/gif', '.avif': 'image/avif', '.bmp': 'image/bmp' };
 class SharingService {
-  constructor({ state, indexed, service, beforeImages, staticDir }) {
-    Object.assign(this, { state, indexed, service, beforeImages, staticDir });
+  constructor({ state, indexed, service, beforeImages, staticDir, tokenFile }) {
+    Object.assign(this, { state, indexed, service, beforeImages, staticDir, tokenFile });
   }
   status() {
     const port = this.server?.address()?.port;
@@ -19,7 +19,15 @@ class SharingService {
   }
   async start(port = 47831, host = '0.0.0.0') {
     if (this.server) return this.status();
-    this.token = crypto.randomBytes(24).toString('hex');
+    if (!this.token && this.tokenFile) {
+      try { this.token = (await fs.readFile(this.tokenFile, 'utf8')).trim(); }
+      catch (error) { if (error.code !== 'ENOENT') throw error; }
+    }
+    if (!/^[A-Z0-9]{5}$/.test(this.token || '')) {
+      const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+      this.token = Array.from({ length: 5 }, () => alphabet[crypto.randomInt(alphabet.length)]).join('');
+    }
+    if (this.tokenFile) await fs.writeFile(this.tokenFile, this.token, { mode: 0o600 });
     const server = http.createServer((req, res) => this.handle(req, res).catch(() => {
       if (!res.headersSent) res.writeHead(404, { 'Cache-Control': 'no-store' });
       res.end('Resource unavailable');
@@ -30,7 +38,7 @@ class SharingService {
     return this.status();
   }
   async stop() {
-    const server = this.server; this.server = null; this.token = '';
+    const server = this.server; this.server = null;
     if (server) { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }
     return this.status();
   }
@@ -56,7 +64,7 @@ class SharingService {
       res.setHeader('Content-Type', mime[path.extname(file)] || 'application/octet-stream');
       return res.end(await fs.readFile(file));
     }
-    const supplied = Buffer.from(req.headers.authorization || '');
+    const supplied = Buffer.from((req.headers.authorization || '').replace(/^Bearer ([a-z0-9]{5})$/i, (_match, key) => `Bearer ${key.toUpperCase()}`));
     const expected = Buffer.from(`Bearer ${this.token}`);
     if (!this.token || supplied.length !== expected.length || !crypto.timingSafeEqual(supplied, expected)) { res.writeHead(401); return res.end('Pairing key required'); }
     if (url.pathname === '/api/library') {

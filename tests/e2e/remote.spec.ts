@@ -8,14 +8,16 @@ test('pair from a mobile window, browse originals, filter, cache shell and revok
   await fs.mkdir(path.join(root, 'Nested'), { recursive: true });
   await sharp({ create: { width: 600, height: 400, channels: 3, background: '#986bcc' } }).png().toFile(path.join(root, 'Purple.png'));
   await sharp({ create: { width: 600, height: 400, channels: 3, background: '#55aa99' } }).png().toFile(path.join(root, 'Nested', 'Green.png'));
+  await fs.mkdir(path.resolve('.test-data/remote-profile'), { recursive: true });
+  await fs.writeFile(path.resolve('.test-data/remote-profile/settings.json'), JSON.stringify({ recent: [] }));
   const app = await electron.launch({ args: ['.', `--folder=${root}`], env: { ...process.env, LUMEN_TEST_DATA: path.resolve('.test-data/remote-profile') } });
   try {
     const desktop = await app.firstWindow();
     await expect(desktop.getByText('2 images indexed', { exact: false })).toBeVisible();
     await desktop.getByRole('button', { name: 'Share on network' }).click();
-    await desktop.getByRole('button', { name: 'Start sharing', exact: true }).click();
+    await expect(desktop.getByRole('button', { name: 'Stop sharing', exact: true })).toBeVisible();
     const token = await desktop.getByRole('textbox', { name: 'Pairing key', exact: true }).inputValue();
-    expect(token).toHaveLength(48);
+    expect(token).toMatch(/^[A-Z0-9]{5}$/);
     await app.evaluate(async ({ BrowserWindow }) => {
       const mobile = new BrowserWindow({ width: 390, height: 844, webPreferences: { nodeIntegration: false, contextIsolation: true } });
       await mobile.loadURL('http://127.0.0.1:47831');
@@ -28,6 +30,9 @@ test('pair from a mobile window, browse originals, filter, cache shell and revok
     await mobile.getByLabel('Pairing key', { exact: true }).fill(token);
     await mobile.getByRole('button', { name: 'Connect to Lumen' }).click();
     await expect(mobile.locator('.card')).toHaveCount(2);
+    await mobile.reload();
+    await expect(mobile.locator('.card')).toHaveCount(2);
+    expect(await mobile.evaluate(() => JSON.parse(localStorage.getItem('lumen.remote')!).token)).toBe(token);
     await expect.poll(() => mobile.locator('.card img').first().evaluate(img => (img as HTMLImageElement).naturalWidth)).toBe(600);
     await mobile.screenshot({ path: 'test-results/remote-mobile.png' });
     await mobile.locator('.card').first().click();
@@ -47,6 +52,32 @@ test('pair from a mobile window, browse originals, filter, cache shell and revok
     await expect(mobile.getByRole('status')).toContainText('Cannot reach your PC');
     await mobile.getByRole('button', { name: 'Disconnect', exact: true }).click();
     await expect(mobile.getByRole('heading', { name: 'A window into your PC.' })).toBeVisible();
+    expect(await mobile.evaluate(() => localStorage.getItem('lumen.remote'))).toBeNull();
     expect(errors).toEqual([]);
+  } finally { await app.close(); }
+});
+
+test('desktop restarts keep the pairing key and sharing preference', async () => {
+  const profile = await fs.mkdtemp(path.resolve('.test-data/remote-restart-'));
+  const launch = () => electron.launch({ args: ['.'], env: { ...process.env, LUMEN_TEST_DATA: profile } });
+  let app = await launch();
+  try {
+    let desktop = await app.firstWindow();
+    await desktop.getByRole('button', { name: 'Share on network' }).click();
+    await expect(desktop.getByRole('button', { name: 'Stop sharing', exact: true })).toBeVisible();
+    const token = await desktop.getByRole('textbox', { name: 'Pairing key', exact: true }).inputValue();
+    await app.close();
+    app = await launch(); desktop = await app.firstWindow();
+    await desktop.getByRole('button', { name: 'Share on network' }).click();
+    await expect(desktop.getByRole('button', { name: 'Stop sharing', exact: true })).toBeVisible();
+    await expect(desktop.getByRole('textbox', { name: 'Pairing key', exact: true })).toHaveValue(token);
+    await desktop.getByRole('button', { name: 'Stop sharing', exact: true }).click();
+    await expect(desktop.getByRole('button', { name: 'Start sharing', exact: true })).toBeVisible();
+    await app.close();
+    app = await launch(); desktop = await app.firstWindow();
+    await desktop.getByRole('button', { name: 'Share on network' }).click();
+    await expect(desktop.getByRole('button', { name: 'Start sharing', exact: true })).toBeVisible();
+    await desktop.getByRole('button', { name: 'Start sharing', exact: true }).click();
+    await expect(desktop.getByRole('textbox', { name: 'Pairing key', exact: true })).toHaveValue(token);
   } finally { await app.close(); }
 });

@@ -12,8 +12,10 @@ test('sharing authenticates, limits origins, paginates and serves only indexed f
   let state = { root, generation: 1, scanning: false, snapshot: { items: Array.from({ length: 105 }, (_, i) => ({ ...item, name: `${i}.png` })), folders: [] } };
   const sharing = new SharingService({ state: () => state, indexed: id => { assert.equal(id, item.id); return item; }, beforeImages: async () => {}, service: { full: async i => i.path, thumbnail: async i => i.path }, staticDir: path.resolve('dist-pwa') });
   const status = await sharing.start(0, '127.0.0.1'); t.after(() => sharing.stop());
+  assert.match(status.token, /^[A-Z0-9]{5}$/);
   const base = `http://127.0.0.1:${status.port}`, headers = { Authorization: `Bearer ${status.token}` };
   assert.equal((await fetch(base + '/api/library')).status, 401);
+  assert.equal((await fetch(base + '/api/library', { headers: { Authorization: `Bearer ${status.token.toLowerCase()}` } })).status, 200);
   assert.equal((await fetch(base + '/api/library', { headers: { ...headers, Origin: 'https://evil.example' } })).status, 403);
   const response = await fetch(base + '/api/library', { headers: { ...headers, Origin: 'https://jamesiv4.github.io' } });
   assert.equal(response.headers.get('access-control-allow-origin'), 'https://jamesiv4.github.io');
@@ -28,5 +30,17 @@ test('sharing authenticates, limits origins, paginates and serves only indexed f
   state = { ...state, root: path.join(root, 'other') }; await fs.mkdir(state.root);
   assert.equal((await fetch(base + '/api/image/abc123', { headers })).status, 403);
   const old = status.token; await sharing.stop(); assert.equal(sharing.status().active, false);
-  const next = await sharing.start(0, '127.0.0.1'); assert.notEqual(next.token, old);
+  const next = await sharing.start(0, '127.0.0.1'); assert.equal(next.token, old);
+});
+
+test('pairing key persists across service instances', async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'lumen-pair-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const options = { tokenFile: path.join(root, 'pairing-key.txt') };
+  const first = new SharingService(options);
+  const status = await first.start(0, '127.0.0.1');
+  await first.stop();
+  const second = new SharingService(options);
+  t.after(() => second.stop());
+  assert.equal((await second.start(0, '127.0.0.1')).token, status.token);
 });
