@@ -137,6 +137,11 @@ app.whenReady().then(async () => {
     webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true },
   });
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  window.on('app-command', (_event, command) => {
+    if (command === 'browser-backward' || command === 'browser-forward') {
+      window.webContents.send('window:navigate', command === 'browser-backward' ? 'back' : 'forward');
+    }
+  });
   window.webContents.on('will-navigate', event => event.preventDefault());
   window.webContents.session.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
   window.once('ready-to-show', () => {

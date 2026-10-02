@@ -13,8 +13,9 @@ function ImageLayer({ item, visible, interactive, nearestNeighbor, onReady, onFa
 }) {
   const layer = useRef<HTMLDivElement>(null), transform = useRef<ReactZoomPanPinchRef>(null);
   const [dimensions, setDimensions] = useState<Dimensions | null>(null), [scale, setScale] = useState(1);
-  const fitScale = dimensions && layer.current
-    ? Math.min((layer.current.clientWidth - 80) / dimensions.width, (layer.current.clientHeight - 80) / dimensions.height, 1) : 1;
+  const viewportScale = dimensions && layer.current
+    ? Math.min((layer.current.clientWidth - 80) / dimensions.width, (layer.current.clientHeight - 80) / dimensions.height) : 1;
+  const fitScale = Math.min(viewportScale, 1);
   const nearestRendering = CSS.supports('image-rendering', 'crisp-edges') ? 'crisp-edges' : 'pixelated';
   useLayoutEffect(() => {
     if (!dimensions || !layer.current || !transform.current) return;
@@ -24,7 +25,7 @@ function ImageLayer({ item, visible, interactive, nearestNeighbor, onReady, onFa
   }, [dimensions, item, onReady]);
   return <div className="viewer-image-layer" ref={layer} aria-hidden={!visible} onDoubleClick={onDoubleClick}
     style={{ visibility: visible ? 'visible' : 'hidden', pointerEvents: interactive ? 'auto' : 'none' }}>
-    <TransformWrapper ref={transform} initialScale={1} minScale={Math.min(0.01, fitScale / 2)} maxScale={16}
+    <TransformWrapper ref={transform} initialScale={1} minScale={Math.min(0.01, fitScale / 2)} maxScale={Math.max(16, viewportScale)}
       limitToBounds={false} centerZoomedOut={false}
       // Smooth wheel mode multiplies step by deltaY (usually 100–120 px per tick).
       // Scale the step with current zoom so a tick stays modest even on tiny/huge images.
@@ -74,7 +75,7 @@ export default function Viewer({ item, index, count, onClose, onPrevious, onNext
   const layers = displayed && displayed.item.id !== item.id ? [displayed.item, item] : [item];
   const fitScale = useCallback(() => {
     if (!stage.current || !dimensions) return 1;
-    return Math.min((stage.current.clientWidth - 80) / dimensions.width, (stage.current.clientHeight - 80) / dimensions.height, 1);
+    return Math.min((stage.current.clientWidth - 80) / dimensions.width, (stage.current.clientHeight - 80) / dimensions.height);
   }, [dimensions]);
   const fit = useCallback((duration = 200) => {
     if (!dimensions || !stage.current || !transform.current) return;

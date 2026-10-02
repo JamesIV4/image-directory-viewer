@@ -1,6 +1,6 @@
 {
   "name": "image-directory-viewer",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "A fast, local, recursive image browser",
   "main": "electron/main.cjs",
   "scripts": {

@@ -23,6 +23,7 @@ declare global {
       metadata(id: string): Promise<Metadata>; reveal(id: string): Promise<void>; copyPath(id: string): Promise<void>;
       fullscreen(): Promise<boolean>; droppedPath(file: File): string;
       onIndex(callback: (event: IndexEvent) => void): () => void;
+      onNavigate?(callback: (direction: 'back' | 'forward') => void): () => void;
     }
   }
 }

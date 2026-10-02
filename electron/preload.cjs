@@ -11,6 +11,11 @@ contextBridge.exposeInMainWorld('lumen', {
   copyPath: id => ipcRenderer.invoke('image:copy', id),
   fullscreen: () => ipcRenderer.invoke('window:fullscreen'),
   droppedPath: file => webUtils.getPathForFile(file),
+  onNavigate: callback => {
+    const handler = (_event, direction) => callback(direction);
+    ipcRenderer.on('window:navigate', handler);
+    return () => ipcRenderer.removeListener('window:navigate', handler);
+  },
   onIndex: callback => {
     const handler = (_event, data) => callback(data);
     ipcRenderer.on('library:event', handler);

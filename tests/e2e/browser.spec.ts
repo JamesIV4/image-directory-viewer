@@ -141,6 +141,10 @@ test('original image fit, 1:1, smooth wheel zoom, navigation, and details', asyn
   await page.getByRole('button', { name: '1:1', exact: true }).click();
   await expect(page.locator('.zoom-value')).toHaveText('100%');
   await expect.poll(async () => Math.round((await page.locator('.original-image').boundingBox())!.width)).toBe(1800);
+  await page.locator('.viewer-image-layer:visible').dblclick();
+  await expect(page.locator('.zoom-value')).toHaveText(`${initialScale}%`);
+  await page.locator('.viewer-image-layer:visible').dblclick();
+  await expect(page.locator('.zoom-value')).toHaveText('100%');
   await page.getByRole('button', { name: 'Zoom in', exact: true }).click();
   await expect.poll(async () => Number((await page.locator('.zoom-value').innerText()).replace('%', ''))).toBeGreaterThan(100);
   await page.getByRole('button', { name: 'Fit', exact: true }).click();
@@ -183,6 +187,42 @@ test('original image fit, 1:1, smooth wheel zoom, navigation, and details', asyn
   await expect(page.getByRole('button', { name: 'Nearest neighbor', exact: true })).toHaveAttribute('aria-pressed', 'true');
   await page.keyboard.press('n');
   await page.keyboard.press('Escape');
+});
+
+test('mouse back and forward return to the last detail image, and small images toggle fit and 1:1', async () => {
+  const command = (direction: 'backward' | 'forward') => app.evaluate(({ BrowserWindow }, value) => {
+    BrowserWindow.getAllWindows()[0].emit('app-command', {}, `browser-${value}`);
+  }, direction);
+  await page.locator('.tree-label').filter({ hasText: 'Textures' }).click();
+  await page.locator('.image-card').first().click();
+  await expect(page.locator('.zoom-value')).toHaveText('100%');
+  await page.locator('.viewer-image-layer:visible').dblclick();
+  await expect.poll(async () => Number((await page.locator('.zoom-value').innerText()).replace('%', ''))).toBeGreaterThan(100);
+  await expect.poll(async () => Math.round((await page.locator('.original-image').boundingBox())!.width)).toBeGreaterThan(60);
+  // Wait for the animated fit to finish before toggling back.
+  const fitPercent = await page.locator('.viewer-stage').evaluate(stage => Math.round(Math.min((stage.clientWidth - 80) / 60, (stage.clientHeight - 80) / 40) * 100));
+  await expect(page.locator('.zoom-value')).toHaveText(`${fitPercent}%`);
+  await page.locator('.viewer-image-layer:visible').dblclick();
+  await expect(page.locator('.zoom-value')).toHaveText('100%');
+  await expect.poll(async () => Math.round((await page.locator('.original-image').boundingBox())!.width)).toBe(60);
+  await page.keyboard.press('ArrowRight');
+  const name = await page.locator('.viewer-title strong').innerText();
+  await command('forward');
+  await expect(page.locator('.viewer-title strong')).toHaveText(name);
+  await command('backward');
+  await expect(page.locator('.viewer')).toHaveCount(0);
+  await command('backward');
+  await expect(page.locator('.viewer')).toHaveCount(0);
+  await page.keyboard.press('ArrowRight'); // Collection selection can change independently.
+  await command('forward');
+  await expect(page.locator('.viewer-title strong')).toHaveText(name);
+  await page.keyboard.press('Escape');
+  await command('forward');
+  await expect(page.locator('.viewer-title strong')).toHaveText(name);
+  await command('backward');
+  await page.locator('.tree-label').filter({ hasText: 'Landscapes' }).click();
+  await command('forward');
+  await expect(page.locator('.viewer')).toHaveCount(0);
 });
 
 test('image navigation retains the original through decoding and skips stale loads without blank frames', async () => {

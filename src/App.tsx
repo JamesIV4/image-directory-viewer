@@ -50,6 +50,7 @@ export default function App() {
   }, []);
   useEffect(() => { localStorage.setItem('lumen.sidebarWidth', JSON.stringify(sidebarWidth)); }, [sidebarWidth]);
   const [selected, setSelected] = useState(''), [viewer, setViewer] = useState(false);
+  const returnImage = useRef('');
   const [scrollReset, setScrollReset] = useState(0);
   const [toast, setToast] = useState(''), [dragging, setDragging] = useState(false), [help, setHelp] = useState(false), [showWarnings, setShowWarnings] = useState(false);
   const search = useRef<HTMLInputElement>(null), generation = useRef(0), indexed = useRef(new Map<string, ImageItem>());
@@ -81,7 +82,7 @@ export default function App() {
           setExcludedDirectImages(new Set()); setContextMenu(null);
           setNewerThan(''); setOlderThan(''); setDateFiltersOpen(false);
           setDateBoundsInclusive(false);
-          setViewer(false); setSelected('');
+          setViewer(false); setSelected(''); returnImage.current = '';
         }
         setScanning(true); setWarnings([]); setError(''); setDirectories(0);
       } else if (event.type === 'batch') {
@@ -178,7 +179,18 @@ export default function App() {
     const next = Math.min(filtered.length - 1, Math.max(0, selectedIndex + direction));
     if (filtered[next]) setSelected(filtered[next].id);
   }, [filtered, selectedIndex]);
-  const closeViewer = useCallback(() => setViewer(false), []);
+  const closeViewer = useCallback(() => {
+    returnImage.current = selected;
+    setViewer(false);
+  }, [selected]);
+  useEffect(() => window.lumen.onNavigate?.(direction => {
+    if (help || showWarnings || contextMenu) return;
+    if (direction === 'back' && viewer) closeViewer();
+    else if (direction === 'forward' && !viewer && filtered.some(item => item.id === returnImage.current)) {
+      setSelected(returnImage.current);
+      setViewer(true);
+    }
+  }), [viewer, filtered, closeViewer, help, showWarnings, contextMenu]);
   useEffect(() => {
     const keydown = (event: KeyboardEvent) => {
       if (event.defaultPrevented || contextMenu || (event.target as HTMLElement).closest('[role="separator"], [role="slider"]')) return;
