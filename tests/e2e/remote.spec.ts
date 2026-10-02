@@ -8,13 +8,20 @@ test('fresh HTTPS PWA discovers the advertised hostname without an address or ke
   const root = path.join(profile, 'Photos'); await fs.mkdir(root);
   await sharp({ create: { width: 20, height: 20, channels: 3, background: '#55aa99' } }).png().toFile(path.join(root, 'Found.png'));
   // Exercise browser discovery and cross-origin HTTP; mDNS advertisement is checked separately on the LAN.
-  const browser = await chromium.launch({ args: ['--host-resolver-rules=MAP lumen.local 127.0.0.1'] });
-  const app = await electron.launch({ args: ['.', `--folder=${root}`], env: { ...process.env, LUMEN_TEST_DATA: profile } });
+  const browser = await chromium.launch({ args: ['--host-resolver-rules=MAP lumen.local:47831 127.0.0.1:47832'] });
+  const app = await electron.launch({ args: ['.', `--folder=${root}`], env: { ...process.env, LUMEN_TEST_DATA: profile, LUMEN_TEST_SHARE_PORT: '47832' } });
   try {
     const desktop = await app.firstWindow();
     await expect(desktop.getByText('1 images indexed', { exact: false })).toBeVisible();
     const context = await browser.newContext({ permissions: ['local-network-access'], serviceWorkers: 'block' });
+    await context.addInitScript(() => {
+      Object.defineProperty(navigator, 'canShare', { value: () => true });
+      Object.defineProperty(navigator, 'share', { configurable: true, value: async ({ files }: { files: File[] }) => {
+        (window as any).sharedImage = { name: files[0].name, type: files[0].type, size: files[0].size, active: navigator.userActivation.isActive };
+      } });
+    });
     const mobile = await context.newPage();
+    await mobile.setViewportSize({ width: 390, height: 844 });
     const site = 'https://jamesiv4.github.io/image-directory-viewer/';
     await mobile.route(site + '**', async route => {
       const name = new URL(route.request().url()).pathname.slice('/image-directory-viewer/'.length) || 'index.html';
@@ -26,6 +33,51 @@ test('fresh HTTPS PWA discovers the advertised hostname without an address or ke
     await expect(mobile.locator('.image-card')).toHaveCount(1, { timeout: 15000 });
     await expect(mobile.locator('.image-card')).toContainText('Found.png');
     expect(await mobile.evaluate(() => JSON.parse(localStorage.getItem('lumen.remote')!).base)).toBe('http://lumen.local:47831');
+    await mobile.locator('.image-card').click();
+    await mobile.getByRole('button', { name: 'Save image', exact: true }).click();
+    await expect(mobile.getByRole('link', { name: 'Download image' })).toBeVisible();
+    await mobile.getByRole('button', { name: 'Save or share' }).click();
+    const shared = await mobile.evaluate(() => (window as any).sharedImage);
+    expect(shared).toEqual({ name: 'Found.png', type: 'image/png', size: (await fs.stat(path.join(root, 'Found.png'))).size, active: true });
+    await mobile.evaluate(() => Object.defineProperty(navigator, 'share', { configurable: true, value: async () => { throw new DOMException('Canceled', 'AbortError'); } }));
+    await mobile.getByRole('button', { name: 'Save or share' }).click();
+    await expect(mobile.locator('.save-image-panel').getByRole('alert')).toHaveCount(0);
+    const downloadPromise = mobile.waitForEvent('download');
+    await mobile.getByRole('link', { name: 'Download image' }).click();
+    const download = await downloadPromise;
+    expect(download.suggestedFilename()).toBe('Found.png');
+    expect(await fs.readFile((await download.path())!)).toEqual(await fs.readFile(path.join(root, 'Found.png')));
+    await mobile.screenshot({ path: 'test-results/remote-save-image.png' });
+    expect(await mobile.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await mobile.getByRole('button', { name: 'Close save options' }).press('Escape');
+    await expect(mobile.getByRole('region', { name: 'Save image options' })).toHaveCount(0);
+    await mobile.getByRole('button', { name: 'Image details', exact: true }).click();
+    await mobile.locator('.image-info').getByRole('button', { name: 'Save image', exact: true }).click();
+    await expect(mobile.getByRole('region', { name: 'Save image options' })).toBeVisible();
+    await mobile.getByRole('button', { name: 'Close save options' }).click();
+    await mobile.getByRole('button', { name: 'Close viewer', exact: true }).click();
+    const other = path.join(profile, 'Other photos'); await fs.mkdir(other);
+    await sharp({ create: { width: 30, height: 30, channels: 3, background: '#aa5599' } }).png().toFile(path.join(other, 'Selected.png'));
+    await mobile.getByRole('button', { name: 'Open folder', exact: false }).click();
+    const picker = mobile.getByRole('dialog', { name: 'Choose a folder on your PC', exact: true });
+    await expect(picker.getByLabel('PC folder path')).toHaveValue(root);
+    await expect(picker.getByRole('button', { name: 'Select this folder' })).toBeEnabled();
+    await picker.getByRole('button', { name: 'Up one folder' }).click();
+    await picker.getByRole('button', { name: 'Other photos', exact: true }).click();
+    await expect(picker.getByLabel('PC folder path')).toHaveValue(other);
+    await mobile.screenshot({ path: 'test-results/remote-folder-picker.png' });
+    await picker.getByRole('button', { name: 'Select this folder' }).click();
+    await expect(picker).toHaveCount(0);
+    await expect(mobile.locator('.image-card')).toContainText('Selected.png');
+    await expect(desktop.locator('.image-card')).toContainText('Selected.png');
+    await mobile.getByRole('button', { name: 'Open folder', exact: false }).click();
+    await expect(picker.getByRole('button', { name: 'Select this folder' })).toBeEnabled();
+    await mobile.getByLabel('PC folder path').fill(path.join(profile, 'missing-folder'));
+    await mobile.getByRole('button', { name: 'Go', exact: true }).click();
+    await expect(picker.getByRole('alert')).toContainText('Cannot browse this folder');
+    await expect(picker.getByRole('button', { name: 'Select this folder' })).toBeDisabled();
+    await mobile.getByRole('button', { name: 'Cancel folder selection' }).click();
+    await expect(mobile.locator('.image-card')).toContainText('Selected.png');
   } finally { await browser.close(); await app.close(); }
 });
 
@@ -36,7 +88,7 @@ test('automatically connect, browse originals, reconnect, cache shell and revoke
   await sharp({ create: { width: 600, height: 400, channels: 3, background: '#55aa99' } }).png().toFile(path.join(root, 'Nested', 'Green.png'));
   const profile = await fs.mkdtemp(path.resolve('.test-data/remote-profile-'));
   await fs.writeFile(path.join(profile, 'settings.json'), JSON.stringify({ recent: [] }));
-  const app = await electron.launch({ args: ['.', `--folder=${root}`], env: { ...process.env, LUMEN_TEST_DATA: profile } });
+  const app = await electron.launch({ args: ['.', `--folder=${root}`], env: { ...process.env, LUMEN_TEST_DATA: profile, LUMEN_TEST_SHARE_PORT: '47832' } });
   try {
     const desktop = await app.firstWindow();
     await expect(desktop.getByText('2 images indexed', { exact: false })).toBeVisible();
@@ -46,7 +98,7 @@ test('automatically connect, browse originals, reconnect, cache shell and revoke
     expect(token).toMatch(/^[A-Z0-9]{5}$/);
     await app.evaluate(async ({ BrowserWindow }) => {
       const mobile = new BrowserWindow({ width: 390, height: 844, webPreferences: { nodeIntegration: false, contextIsolation: true } });
-      await mobile.loadURL('http://127.0.0.1:47831');
+      await mobile.loadURL('http://127.0.0.1:47832');
     });
     const mobile = app.windows().at(-1)!;
     const errors: string[] = []; mobile.on('pageerror', error => errors.push(error.message));
@@ -124,7 +176,7 @@ test('automatically connect, browse originals, reconnect, cache shell and revoke
 
 test('desktop restarts keep the pairing key and sharing preference', async () => {
   const profile = await fs.mkdtemp(path.resolve('.test-data/remote-restart-'));
-  const launch = () => electron.launch({ args: ['.'], env: { ...process.env, LUMEN_TEST_DATA: profile } });
+  const launch = () => electron.launch({ args: ['.'], env: { ...process.env, LUMEN_TEST_DATA: profile, LUMEN_TEST_SHARE_PORT: '47832' } });
   let app = await launch();
   try {
     let desktop = await app.firstWindow();

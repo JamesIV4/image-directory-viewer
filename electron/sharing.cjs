@@ -10,15 +10,15 @@ const { Bonjour } = require('bonjour-service');
 const PAGE_ORIGIN = 'https://jamesiv4.github.io';
 const mime = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.webmanifest': 'application/manifest+json', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.gif': 'image/gif', '.avif': 'image/avif', '.bmp': 'image/bmp' };
 class SharingService {
-  constructor({ state, indexed, service, beforeImages, staticDir, tokenFile, actions }) {
-    Object.assign(this, { state, indexed, service, beforeImages, staticDir, tokenFile, actions });
+  constructor({ state, indexed, service, beforeImages, staticDir, tokenFile, actions, port = 47831 }) {
+    Object.assign(this, { state, indexed, service, beforeImages, staticDir, tokenFile, actions, port });
   }
   status() {
     const port = this.server?.address()?.port;
     const addresses = Object.values(os.networkInterfaces()).flat().filter(i => i && i.family === 'IPv4' && !i.internal).map(i => `http://${i.address}:${port}`);
     return { active: !!port, token: port ? this.token : '', addresses: port ? [...new Set(addresses)] : [], port };
   }
-  async start(port = 47831, host = '0.0.0.0') {
+  async start(port = this.port, host = '0.0.0.0') {
     if (this.server) return this.status();
     if (!this.token && this.tokenFile) {
       try { this.token = (await fs.readFile(this.tokenFile, 'utf8')).trim(); }
@@ -95,14 +95,41 @@ class SharingService {
       res.setHeader('Content-Type', 'application/json');
       return res.end(JSON.stringify(url.searchParams.get('revision') === revision ? null : state));
     }
+    if (url.pathname === '/api/folders') {
+      const requested = url.searchParams.get('path') || '';
+      res.setHeader('Content-Type', 'application/json');
+      try {
+        if (!requested) {
+          const roots = process.platform === 'win32'
+            ? (await Promise.all(Array.from({ length: 26 }, (_, i) => String.fromCharCode(65 + i) + ':\\').map(async drive => { try { await fs.access(drive); return drive; } catch { return null; } }))).filter(Boolean)
+            : ['/'];
+          const folders = [...new Set([os.homedir(), ...roots, ...(this.state().recent || [])])].map(folder => ({ name: folder, path: folder }));
+          return res.end(JSON.stringify({ path: '', parent: null, folders }));
+        }
+        if (!path.isAbsolute(requested)) throw new Error('Absolute folder path required');
+        const folder = await fs.realpath(requested);
+        const entries = await fs.readdir(folder, { withFileTypes: true });
+        const directories = await Promise.all(entries.map(async entry => {
+          if (entry.isDirectory()) return entry;
+          if (entry.isSymbolicLink()) { try { if ((await fs.stat(path.join(folder, entry.name))).isDirectory()) return entry; } catch { /* Skip broken links. */ } }
+          return null;
+        }));
+        const folders = directories.filter(Boolean).map(entry => ({ name: entry.name, path: path.join(folder, entry.name) })).sort((a, b) => a.name.localeCompare(b.name));
+        const parent = path.dirname(folder);
+        return res.end(JSON.stringify({ path: folder, parent: parent === folder ? null : parent, folders }));
+      } catch { res.writeHead(400); return res.end(JSON.stringify({ error: 'Cannot browse this folder. Check its path and the PC user permissions.' })); }
+    }
     if (url.pathname === '/api/action') {
       let body = '';
       for await (const chunk of req) { body += chunk; if (body.length > 4096) { res.writeHead(413); return res.end(); } }
       try {
         const { action, argument } = JSON.parse(body);
         if (!['open', 'rescan', 'cancel', 'reveal'].includes(action) || !this.actions?.[action]) { res.writeHead(400); return res.end(); }
-        // Remote folder switches are limited to folders already chosen on this PC.
-        if (action === 'open' && argument && !this.state().recent.includes(argument)) { res.writeHead(403); return res.end(); }
+        // Remote selection never invokes a native dialog on the unattended host.
+        if (action === 'open') {
+          if (typeof argument !== 'string' || !path.isAbsolute(argument)) { res.writeHead(400); return res.end(); }
+          await fs.readdir(argument); // Validate readability before switching libraries.
+        }
         const result = await this.actions[action](argument);
         res.setHeader('Content-Type', 'application/json');
         return res.end(JSON.stringify(result ?? null));

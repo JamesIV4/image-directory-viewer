@@ -2,6 +2,8 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import { TransformWrapper, TransformComponent, type ReactZoomPanPinchRef } from 'react-zoom-pan-pinch';
 import { ArrowLeft, ChevronLeft, ChevronRight, Copy, FolderOpen, Maximize, Minimize, Minus, Plus, Scan, ImageOff, Info, X, Grid2X2 } from 'lucide-react';
 import { original, bytes, type ImageItem, type Metadata } from './types';
+import { Download } from 'lucide-react';
+import SaveImage from './SaveImage';
 
 type Dimensions = { width: number; height: number };
 
@@ -60,6 +62,7 @@ export default function Viewer({ item, index, count, onClose, onPrevious, onNext
   const [metadata, setMetadata] = useState<Metadata | null>(null);
   const [scale, setScale] = useState(1);
   const [info, setInfo] = useState(false), [fullscreen, setFullscreen] = useState(false);
+  const [saveId, setSaveId] = useState<string | null>(null);
   const [nearestNeighbor, setNearestNeighbor] = useState(() => localStorage.getItem('lumen.nearestNeighbor') === 'true');
   useEffect(() => { localStorage.setItem('lumen.nearestNeighbor', String(nearestNeighbor)); }, [nearestNeighbor]);
   const imageReady = useCallback((item: ImageItem, dimensions: Dimensions, controls: ReactZoomPanPinchRef) => {
@@ -132,10 +135,12 @@ export default function Viewer({ item, index, count, onClose, onPrevious, onNext
       <button id="viewer-close" className="icon-button" title="Back to collection (Esc)" aria-label="Close viewer" onClick={onClose}><ArrowLeft size={20} /></button>
       <div className="viewer-title"><strong>{item.name}</strong><span title={item.path}>{item.path}</span></div>
       <span className="viewer-counter">{index + 1} / {count.toLocaleString()}</span>
+      {window.lumen.remote && <button className="icon-button" title="Save image" aria-label="Save image" aria-expanded={saveId === item.id} onClick={() => setSaveId(saveId === item.id ? null : item.id)}><Download size={19} /></button>}
       <button className={`icon-button ${info ? 'active' : ''}`} title="Image details (I)" aria-label="Image details" onClick={() => setInfo(!info)}><Info size={19} /></button>
       <button className="icon-button" title="Fullscreen" aria-label="Toggle fullscreen" onClick={() => invoke(window.lumen.fullscreen().then(setFullscreen))}>{fullscreen ? <Minimize size={19} /> : <Maximize size={19} />}</button>
       <button className="icon-button" title="Close viewer" aria-label="Back to collection" onClick={onClose}><X size={19} /></button>
     </header>
+    {window.lumen.remote && saveId === item.id && <SaveImage key={item.id} item={item} onClose={() => setSaveId(null)} />}
     <div className="viewer-body">
       <div className="viewer-stage" ref={stage}>
         {!displayed && !failed && <div className="viewer-loading"><span className="spinner" />Loading original…</div>}
@@ -153,6 +158,7 @@ export default function Viewer({ item, index, count, onClose, onPrevious, onNext
           {metadata && <><dt>Color space</dt><dd>{metadata.space || 'Unknown'}</dd><dt>Frames / pages</dt><dd>{metadata.pages}</dd></>}
           <dt>Full path</dt><dd className="full-path">{item.path}</dd></dl>
         <button className="button" onClick={() => invoke(window.lumen.copyPath(item.id), 'Image path copied')}><Copy size={15} />Copy path</button>
+        {window.lumen.remote && <button className="button" onClick={() => setSaveId(item.id)}><Download size={15} />Save image</button>}
         <button className="button" onClick={() => invoke(window.lumen.reveal(item.id))}><FolderOpen size={15} />Show in Explorer</button>
       </aside>}
     </div>

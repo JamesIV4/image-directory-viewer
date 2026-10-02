@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import App from './App';
+import RemoteFolderPicker, { type FolderListing } from './RemoteFolderPicker';
 import type { IndexEvent } from './types';
 import './style.css';
 import '../pwa/style.css';
@@ -61,13 +62,18 @@ function Remote() {
 }
 function Connected({ connection, disconnect }: { connection: Connection; disconnect(): void }) {
   const [ready, setReady] = useState(false), [error, setError] = useState('');
+  const [picker, setPicker] = useState<{ initial: string; browse(path: string): Promise<FolderListing>; choose(path?: string): void } | null>(null);
   useEffect(() => {
     let alive = true, timer: ReturnType<typeof setTimeout>, last: State | null = null, stamp = '';
     const abort = new AbortController(), listeners = new Set<(event: IndexEvent) => void>();
     let token = connection.token;
+    let cancelPicker: (() => void) | undefined;
     async function request(route: string, body?: unknown) {
       const response = await fetch(connection.base + route, { method: body ? 'POST' : 'GET', headers: { Authorization: `Bearer ${token}`, ...(body ? { 'Content-Type': 'application/json' } : {}) }, body: body ? JSON.stringify(body) : undefined, cache: 'no-store', signal: abort.signal });
-      if (!response.ok) throw new Error(response.status === 401 ? 'Pairing key rejected. Disconnect and pair again.' : 'Image or library unavailable. Refresh the collection.');
+      if (!response.ok) {
+        const detail = await response.json().catch(() => null);
+        throw new Error(response.status === 401 ? 'Pairing key rejected. Disconnect and pair again.' : detail?.error || 'Image or library unavailable. Refresh the collection.');
+      }
       return response.json();
     }
     const emit = (event: IndexEvent) => listeners.forEach(listener => listener(event));
@@ -88,7 +94,14 @@ function Connected({ connection, disconnect }: { connection: Connection; disconn
     window.lumen = {
       remote: { disconnect }, mediaUrl: (kind, id) => `${connection.base}/api/${kind}/${id}?key=${encodeURIComponent(token)}`,
       getState: () => last ? Promise.resolve(last) : update(), onIndex: listener => { listeners.add(listener); return () => { listeners.delete(listener); }; },
-      openFolder: path => action('open', path), rescan: () => action('rescan'), cancel: () => action('cancel'),
+      openFolder: async path => {
+        if (!path) path = await new Promise<string | undefined>(resolve => {
+          const choose = (path?: string) => { setPicker(null); cancelPicker = undefined; resolve(path); };
+          cancelPicker = () => choose();
+          setPicker({ initial: last?.root || '', browse: path => request('/api/folders?path=' + encodeURIComponent(path)), choose });
+        });
+        return path ? action('open', path) : null;
+      }, rescan: () => action('rescan'), cancel: () => action('cancel'),
       metadata: id => request(`/api/metadata/${id}`), reveal: id => action('reveal', id),
       copyPath: async id => { const item = last?.snapshot?.items.find(item => item.id === id); if (!item) throw new Error('Image unavailable'); if (!navigator.clipboard) throw new Error('Copy path requires the HTTPS PWA.'); await navigator.clipboard.writeText(item.path); },
       fullscreen: async () => { if (document.fullscreenElement) await document.exitFullscreen(); else await document.documentElement.requestFullscreen(); return !!document.fullscreenElement; },
@@ -102,9 +115,9 @@ function Connected({ connection, disconnect }: { connection: Connection; disconn
         try { token = await discover(connection.base); await update(); } catch { /* Retry while retaining the collection. */ }
       } finally { if (alive) timer = setTimeout(() => void poll(), 2000); }
     };
-    void poll(); return () => { alive = false; clearTimeout(timer); abort.abort(); listeners.clear(); };
+    void poll(); return () => { alive = false; clearTimeout(timer); abort.abort(); listeners.clear(); cancelPicker?.(); };
   }, [connection, disconnect]);
-  return <div className="remote-app">{ready && <App />}{error && <div className="remote-status" role="status">{error}<button className="button" onClick={disconnect}>Disconnect</button></div>}</div>;
+  return <div className="remote-app">{ready && <App />}{picker && <RemoteFolderPicker {...picker} />}{error && <div className="remote-status" role="status">{error}<button className="button" onClick={disconnect}>Disconnect</button></div>}</div>;
 }
 createRoot(document.getElementById('root')!).render(<Remote />);
 if ('serviceWorker' in navigator && window.isSecureContext) void navigator.serviceWorker.register('./sw.js').catch(() => {});

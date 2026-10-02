@@ -79,7 +79,7 @@ app.whenReady().then(async () => {
     }
     return { root, recent, scanning, snapshot: data, generation };
   };
-  sharing = new SharingService({ state: libraryState, indexed, service, beforeImages, staticDir: path.join(__dirname, '..', 'dist', 'remote'), tokenFile: path.join(app.getPath('userData'), 'pairing-key.txt') });
+  sharing = new SharingService({ state: libraryState, indexed, service, beforeImages, staticDir: path.join(__dirname, '..', 'dist', 'remote'), tokenFile: path.join(app.getPath('userData'), 'pairing-key.txt'), port: process.env.LUMEN_TEST_DATA ? Number(process.env.LUMEN_TEST_SHARE_PORT || 47831) : 47831 });
   if (sharingEnabled) await sharing.start().catch(error => console.error('Could not start network sharing:', error.message));
   ipcMain.handle('sharing:state', () => sharing.status());
   ipcMain.handle('sharing:set', async (_event, active) => {
