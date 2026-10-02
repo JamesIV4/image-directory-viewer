@@ -5,10 +5,11 @@ import { original, bytes, type ImageItem, type Metadata } from './types';
 
 type Dimensions = { width: number; height: number };
 
-function ImageLayer({ item, visible, interactive, nearestNeighbor, onReady, onFailure, onScale }: {
+function ImageLayer({ item, visible, interactive, nearestNeighbor, onReady, onFailure, onScale, onDoubleClick }: {
   item: ImageItem; visible: boolean; interactive: boolean; nearestNeighbor: boolean;
   onReady: (item: ImageItem, dimensions: Dimensions, transform: ReactZoomPanPinchRef) => void;
   onFailure: (id: string) => void; onScale: (id: string, scale: number) => void;
+  onDoubleClick: () => void;
 }) {
   const layer = useRef<HTMLDivElement>(null), transform = useRef<ReactZoomPanPinchRef>(null);
   const [dimensions, setDimensions] = useState<Dimensions | null>(null), [scale, setScale] = useState(1);
@@ -21,13 +22,13 @@ function ImageLayer({ item, visible, interactive, nearestNeighbor, onReady, onFa
     transform.current.setTransform((layer.current.clientWidth - dimensions.width * scale) / 2, (layer.current.clientHeight - dimensions.height * scale) / 2, scale, 0);
     onReady(item, dimensions, transform.current);
   }, [dimensions, item, onReady]);
-  return <div className="viewer-image-layer" ref={layer} aria-hidden={!visible}
+  return <div className="viewer-image-layer" ref={layer} aria-hidden={!visible} onDoubleClick={onDoubleClick}
     style={{ visibility: visible ? 'visible' : 'hidden', pointerEvents: interactive ? 'auto' : 'none' }}>
     <TransformWrapper ref={transform} initialScale={1} minScale={Math.min(0.01, fitScale / 2)} maxScale={16}
       limitToBounds={false} centerZoomedOut={false}
       // Smooth wheel mode multiplies step by deltaY (usually 100–120 px per tick).
       // Scale the step with current zoom so a tick stays modest even on tiny/huge images.
-      wheel={{ step: scale * 0.001 }} doubleClick={{ mode: 'toggle', step: 1 }} keyboard={{ disabled: true }}
+      wheel={{ step: scale * 0.001 }} doubleClick={{ disabled: true }} keyboard={{ disabled: true }}
       onTransform={(_ref, state) => { setScale(state.scale); onScale(item.id, state.scale); }}>
       <TransformComponent wrapperClass="zoom-wrapper" contentClass="zoom-content">
         <img className="original-image" src={original(item)} alt={item.name} draggable={false}
@@ -84,6 +85,11 @@ export default function Viewer({ item, index, count, onClose, onPrevious, onNext
     if (!stage.current || !dimensions) return;
     transform.current?.setTransform((stage.current.clientWidth - dimensions.width) / 2, (stage.current.clientHeight - dimensions.height) / 2, 1, 220);
   }, [dimensions]);
+  const toggleZoom = useCallback(() => {
+    if (!ready || !transform.current) return;
+    if (Math.abs(transform.current.state.scale - 1) < 0.001) fit();
+    else actual();
+  }, [ready, fit, actual]);
   useEffect(() => {
     setMetadata(null);
     let alive = true;
@@ -134,7 +140,7 @@ export default function Viewer({ item, index, count, onClose, onPrevious, onNext
         {!displayed && !failed && <div className="viewer-loading"><span className="spinner" />Loading original…</div>}
         {layers.map(layer => <ImageLayer key={layer.id} item={layer} visible={!failed && displayed?.item.id === layer.id}
           interactive={ready && layer.id === item.id} nearestNeighbor={nearestNeighbor}
-          onReady={imageReady} onFailure={imageFailure} onScale={imageScale} />)}
+          onReady={imageReady} onFailure={imageFailure} onScale={imageScale} onDoubleClick={toggleZoom} />)}
         {failed && <div className="viewer-error"><ImageOff size={40} /><h2>Unable to display this image</h2><p>The file may be damaged, removed, or use an unsupported codec.</p><button className="button" onClick={() => invoke(window.lumen.reveal(item.id))}><FolderOpen size={16} />Show in Explorer</button></div>}
         <button className="viewer-nav previous" aria-label="Previous image" title="Previous (←)" disabled={index === 0} onClick={onPrevious}><ChevronLeft size={26} /></button>
         <button className="viewer-nav next" aria-label="Next image" title="Next (→)" disabled={index === count - 1} onClick={onNext}><ChevronRight size={26} /></button>
