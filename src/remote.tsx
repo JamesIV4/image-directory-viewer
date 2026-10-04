@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import App from './App';
 import RemoteFolderPicker, { type FolderListing } from './RemoteFolderPicker';
 import type { IndexEvent } from './types';
+import { screenEdge, useTouchSwipe } from './touch-swipe';
 import './style.css';
 import '../pwa/style.css';
 
@@ -23,6 +24,14 @@ function Remote() {
   const [key, setKey] = useState(() => savedConnection()?.token || '');
   const [automatic, setAutomatic] = useState(true), [attempt, setAttempt] = useState(0);
   const [status, setStatus] = useState('Looking for Lumen on your network…');
+  useTouchSwipe(null, x => {
+    const edge = screenEdge(x);
+    if (connection || !edge) return null;
+    return direction => {
+      if (edge === 'left' && direction === 'right') window.history.back();
+      else if (edge === 'right' && direction === 'left') window.history.forward();
+    };
+  }, true);
   const [install, setInstall] = useState<(Event & { prompt(): Promise<void> }) | null>(null);
   useEffect(() => {
     const handler = (event: Event) => { event.preventDefault(); setInstall(event as Event & { prompt(): Promise<void> }); };
@@ -92,7 +101,7 @@ function Connected({ connection, disconnect }: { connection: Connection; disconn
     }
     const action = async (action: string, argument?: string) => { const result = await request('/api/action', { action, argument }); await update(); return result; };
     window.lumen = {
-      remote: { disconnect }, mediaUrl: (kind, id) => `${connection.base}/api/${kind}/${id}?key=${encodeURIComponent(token)}`,
+      remote: { base: connection.base, disconnect }, mediaUrl: (kind, id) => `${connection.base}/api/${kind}/${id}?key=${encodeURIComponent(token)}`,
       getState: () => last ? Promise.resolve(last) : update(), onIndex: listener => { listeners.add(listener); return () => { listeners.delete(listener); }; },
       openFolder: async path => {
         if (!path) path = await new Promise<string | undefined>(resolve => {

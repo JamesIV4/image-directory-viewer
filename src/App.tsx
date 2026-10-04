@@ -7,6 +7,8 @@ import { rootName, type ImageItem, type Folder, type Snapshot } from './types';
 import { createFolderPatternFilter, splitFolderPatterns, folderIncluded, setBranchIncluded, type FolderRules } from './folder-filter';
 import ImageContextMenu from './ImageContextMenu';
 import DateRangeSlider from './DateRangeSlider';
+import { defaultBrowsing, readBrowsing, writeBrowsing } from './browsing-state';
+import { screenEdge, useTouchSwipe } from './touch-swipe';
 
 const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
 function saved<T>(key: string, fallback: T): T {
@@ -14,30 +16,33 @@ function saved<T>(key: string, fallback: T): T {
 }
 
 export default function App() {
+  const [stored] = useState(readBrowsing);
+  const [initial] = useState(() => ({ ...defaultBrowsing(), ...stored.libraries[stored.lastRoot] }));
+  const activeRoot = useRef(stored.lastRoot);
   const [root, setRoot] = useState(''), [recent, setRecent] = useState<string[]>([]);
   const [items, setItems] = useState<ImageItem[]>([]), [folders, setFolders] = useState<Folder[]>([]);
   const [scanning, setScanning] = useState(false), [directories, setDirectories] = useState(0);
   const [warnings, setWarnings] = useState<string[]>([]), [error, setError] = useState('');
-  const [folder, setFolder] = useState(''), [recursive, setRecursive] = useState(true);
-  const [folderRules, setFolderRules] = useState<FolderRules>(new Map());
-  const [includeFolders, setIncludeFolders] = useState<string>(saved('lumen.includeFolders', ''));
-  const [excludeFolders, setExcludeFolders] = useState<string>(saved('lumen.excludeFolders', ''));
+  const [folder, setFolder] = useState(initial.folder), [recursive, setRecursive] = useState(initial.recursive);
+  const [folderRules, setFolderRules] = useState<FolderRules>(() => new Map(initial.folderRules));
+  const [includeFolders, setIncludeFolders] = useState(initial.includeFolders);
+  const [excludeFolders, setExcludeFolders] = useState(initial.excludeFolders);
   useEffect(() => { localStorage.setItem('lumen.includeFolders', JSON.stringify(includeFolders)); }, [includeFolders]);
   useEffect(() => { localStorage.setItem('lumen.excludeFolders', JSON.stringify(excludeFolders)); }, [excludeFolders]);
   const deferredIncludeFolders = useDeferredValue(includeFolders), deferredExcludeFolders = useDeferredValue(excludeFolders);
   const folderPatternIncluded = useMemo(() => createFolderPatternFilter(deferredIncludeFolders, deferredExcludeFolders), [deferredIncludeFolders, deferredExcludeFolders]);
-  const [excludedDirectImages, setExcludedDirectImages] = useState<Set<string>>(new Set());
-  const [query, setQuery] = useState(''), [extension, setExtension] = useState('all');
-  const [newerThan, setNewerThan] = useState(''), [olderThan, setOlderThan] = useState('');
-  const [dateBoundsInclusive, setDateBoundsInclusive] = useState(false);
-  const [dateFiltersOpen, setDateFiltersOpen] = useState(false);
-  const [controlsCollapsed, setControlsCollapsed] = useState<boolean>(saved('lumen.controlsCollapsed', false));
+  const [excludedDirectImages, setExcludedDirectImages] = useState<Set<string>>(() => new Set(initial.excludedDirectImages));
+  const [query, setQuery] = useState(initial.query), [extension, setExtension] = useState(initial.extension);
+  const [newerThan, setNewerThan] = useState(initial.newerThan), [olderThan, setOlderThan] = useState(initial.olderThan);
+  const [dateBoundsInclusive, setDateBoundsInclusive] = useState(initial.dateBoundsInclusive);
+  const [dateFiltersOpen, setDateFiltersOpen] = useState(initial.dateFiltersOpen);
+  const [controlsCollapsed, setControlsCollapsed] = useState(initial.controlsCollapsed);
   const condensed = controlsCollapsed && !!root;
   useEffect(() => { localStorage.setItem('lumen.controlsCollapsed', JSON.stringify(controlsCollapsed)); }, [controlsCollapsed]);
-  const [view, setView] = useState<View>(saved('lumen.view', 'grid'));
-  const [size, setSize] = useState<number>(saved('lumen.size', window.lumen.remote && window.innerWidth <= 600 ? 150 : 230));
-  const [sort, setSort] = useState<string>(saved('lumen.sort', 'name'));
-  const [descending, setDescending] = useState(false), [sidebar, setSidebar] = useState(() => !window.lumen.remote || window.innerWidth > 600);
+  const [view, setView] = useState<View>(initial.view);
+  const [size, setSize] = useState(initial.size);
+  const [sort, setSort] = useState(initial.sort);
+  const [descending, setDescending] = useState(initial.descending), [sidebar, setSidebar] = useState(() => !window.lumen.remote || window.innerWidth > 600);
   const [sidebarWidth, setSidebarWidth] = useState<number>(saved('lumen.sidebarWidth', 242));
   const [resizingSidebar, setResizingSidebar] = useState(false);
   const [contextMenu, setContextMenu] = useState<{ item: ImageItem; x: number; y: number } | null>(null);
@@ -65,23 +70,40 @@ export default function App() {
     else search.current?.focus();
   }, [controlsCollapsed]);
   const deferredQuery = useDeferredValue(query);
+  const activateRoot = useCallback((nextRoot: string) => {
+    if (!nextRoot || activeRoot.current === nextRoot) return;
+    activeRoot.current = nextRoot;
+    const state = { ...defaultBrowsing(), ...readBrowsing().libraries[nextRoot] };
+    setFolder(state.folder); setRecursive(state.recursive); setFolderRules(new Map(state.folderRules));
+    setExcludedDirectImages(new Set(state.excludedDirectImages));
+    setIncludeFolders(state.includeFolders); setExcludeFolders(state.excludeFolders);
+    setQuery(state.query); setExtension(state.extension); setNewerThan(state.newerThan); setOlderThan(state.olderThan);
+    setDateBoundsInclusive(state.dateBoundsInclusive); setDateFiltersOpen(state.dateFiltersOpen);
+    setDescending(state.descending); setSort(state.sort); setView(state.view); setSize(state.size); setControlsCollapsed(state.controlsCollapsed);
+    setViewer(false); setSelected(''); returnImage.current = '';
+  }, []);
+  useEffect(() => {
+    if (root && root === activeRoot.current) writeBrowsing(root, {
+      folder, recursive, folderRules: [...folderRules], excludedDirectImages: [...excludedDirectImages], includeFolders, excludeFolders,
+      query, extension, newerThan, olderThan, dateBoundsInclusive, dateFiltersOpen, descending, sort, view, size, controlsCollapsed,
+    });
+  }, [root, folder, recursive, folderRules, excludedDirectImages, includeFolders, excludeFolders, query, extension,
+    newerThan, olderThan, dateBoundsInclusive, dateFiltersOpen, descending, sort, view, size, controlsCollapsed]);
   const applySnapshot = useCallback((data: Snapshot) => {
+    activateRoot(data.root);
     indexed.current = new Map(data.items.map(item => [item.path, item]));
     setItems(data.items); setFolders(data.folders); setWarnings(data.warnings); setRoot(data.root);
-  }, []);
+  }, [activateRoot]);
   useEffect(() => {
     let alive = true, dirty = false;
     const unsubscribe = window.lumen.onIndex(event => {
       if (event.generation < generation.current) return;
       generation.current = event.generation;
       if (event.type === 'start') {
+        activateRoot(event.root);
         dirty = false; setRoot(event.root);
         if (!event.refresh) {
-          indexed.current = new Map(); setItems([]); setFolders([]); setFolder(''); setQuery(''); setExtension('all');
-          setFolderRules(new Map());
-          setExcludedDirectImages(new Set()); setContextMenu(null);
-          setNewerThan(''); setOlderThan(''); setDateFiltersOpen(false);
-          setDateBoundsInclusive(false);
+          indexed.current = new Map(); setItems([]); setFolders([]); setContextMenu(null);
           setViewer(false); setSelected(''); returnImage.current = '';
         }
         setScanning(true); setWarnings([]); setError(''); setDirectories(0);
@@ -115,11 +137,15 @@ export default function App() {
       setRecent(state.recent);
       if (state.generation < generation.current) return;
       generation.current = state.generation;
-      setRoot(state.root); setScanning(state.scanning);
+      activateRoot(state.root); setRoot(state.root); setScanning(state.scanning);
       if (state.snapshot) applySnapshot(state.snapshot);
+      // Remote clients remember their own last library, scoped to the paired PC.
+      if (window.lumen.remote && stored.lastRoot && state.root !== stored.lastRoot) {
+        void window.lumen.openFolder(stored.lastRoot).catch(error => { if (alive) setError(error.message); });
+      }
     }).catch(error => setError(error.message));
     return () => { alive = false; clearInterval(timer); unsubscribe(); };
-  }, [applySnapshot]);
+  }, [applySnapshot, activateRoot, stored]);
   useEffect(() => { localStorage.setItem('lumen.view', JSON.stringify(view)); }, [view]);
   useEffect(() => { localStorage.setItem('lumen.size', JSON.stringify(size)); }, [size]);
   useEffect(() => { localStorage.setItem('lumen.sort', JSON.stringify(sort)); }, [sort]);
@@ -179,19 +205,79 @@ export default function App() {
     const next = Math.min(filtered.length - 1, Math.max(0, selectedIndex + direction));
     if (filtered[next]) setSelected(filtered[next].id);
   }, [filtered, selectedIndex]);
+  type Location = { root: string; folder: string; viewer: boolean; selected: string };
+  const history = useRef<{ entries: Location[]; index: number }>({ entries: [], index: -1 });
+  const restoringHistory = useRef<Location | null>(null);
   const closeViewer = useCallback(() => {
     returnImage.current = selected;
+    const previous = history.current.entries[history.current.index - 1];
+    if (previous && previous.root === root && previous.folder === folder && !previous.viewer) history.current.index--;
     setViewer(false);
-  }, [selected]);
+  }, [selected, root, folder]);
   useEffect(() => {
-    const navigateView = (direction: 'back' | 'forward') => {
-      if (help || showWarnings || contextMenu) return;
+    if (!root) return;
+    const target = restoringHistory.current;
+    if (target) {
+      if (root === target.root && !scanning) {
+        setFolder(target.folder); setSelected(target.selected); setViewer(target.viewer);
+        restoringHistory.current = null;
+      }
+      return;
+    }
+    const current = history.current.entries[history.current.index];
+    const location = { root, folder, viewer, selected };
+    if (current && current.root === root && current.folder === folder && current.viewer === viewer) {
+      // Image-to-image navigation updates the current detail entry.
+      history.current.entries[history.current.index] = location;
+    } else {
+      history.current.entries.splice(history.current.index + 1);
+      history.current.entries.push(location); history.current.index++;
+    }
+  }, [root, folder, viewer, selected, scanning]);
+  const navigateView = useCallback((direction: 'back' | 'forward', browseFolders = false) => {
+    const sharingDialog = document.querySelector<HTMLDialogElement>('dialog[open]');
+    if (sharingDialog) { if (direction === 'back') sharingDialog.dispatchEvent(new Event('cancel')); return; }
+    if (help || showWarnings || contextMenu) {
+      if (direction === 'back') { setHelp(false); setShowWarnings(false); setContextMenu(null); }
+      return;
+    }
+    if (viewer && document.querySelector('.save-image-panel')) {
+      if (direction === 'back') document.querySelector<HTMLButtonElement>('[aria-label="Close save options"]')?.click();
+      return;
+    }
+    if (!viewer && sidebar && window.lumen.remote && window.innerWidth <= 600 && direction === 'back') { setSidebar(false); return; }
+    if (!browseFolders) {
       if (direction === 'back' && viewer) closeViewer();
       else if (direction === 'forward' && !viewer && filtered.some(item => item.id === returnImage.current)) {
-        setSelected(returnImage.current);
-        setViewer(true);
+        setSelected(returnImage.current); setViewer(true);
       }
+      return;
+    }
+    if (restoringHistory.current) return;
+    const next = history.current.index + (direction === 'back' ? -1 : 1);
+    const target = history.current.entries[next];
+    if (!target) { if (direction === 'back' && viewer) closeViewer(); return; }
+    const previous = history.current.index;
+    history.current.index = next;
+    if (target.root === root) {
+      if (viewer) returnImage.current = selected;
+      setFolder(target.folder); setSelected(target.selected); setViewer(target.viewer);
+    } else {
+      restoringHistory.current = target;
+      void window.lumen.openFolder(target.root).catch(error => {
+        restoringHistory.current = null; history.current.index = previous; setError(error.message);
+      });
+    }
+  }, [root, selected, viewer, sidebar, closeViewer, help, showWarnings, contextMenu, filtered]);
+  useTouchSwipe(null, x => {
+    const edge = screenEdge(x);
+    if (!edge || document.querySelector('.remote-folder-backdrop')) return null;
+    return direction => {
+      if (edge === 'left' && direction === 'right') navigateView('back', true);
+      else if (edge === 'right' && direction === 'left') navigateView('forward', true);
     };
+  }, true);
+  useEffect(() => {
     const sideButton = (event: MouseEvent) => {
       if (event.button !== 3 && event.button !== 4) return;
       // Capture before the zoom library's window mousedown listener starts a pan.
@@ -206,7 +292,7 @@ export default function App() {
       for (const name of events) window.removeEventListener(name, sideButton, true);
       unsubscribe?.();
     };
-  }, [viewer, filtered, closeViewer, help, showWarnings, contextMenu]);
+  }, [navigateView]);
   useEffect(() => {
     const keydown = (event: KeyboardEvent) => {
       if (event.defaultPrevented || contextMenu || (event.target as HTMLElement).closest('[role="separator"], [role="slider"]')) return;

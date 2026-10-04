@@ -12,7 +12,7 @@ if (process.platform === 'win32') app.setAppUserModelId('com.jamesiv4.image-dire
 if (process.env.LUMEN_TEST_DATA) app.setPath('userData', process.env.LUMEN_TEST_DATA);
 protocol.registerSchemesAsPrivileged([{ scheme: 'lumen', privileges: { standard: true, secure: true, supportFetchAPI: true } }]);
 let window, worker, cacheWorker, service, root = '', items = new Map(), snapshot = null, scanning = false, generation = 0;
-let recent = [];
+let recent = [], lastRoot = '';
 let sharingEnabled = true;
 let decoding = false, cacheMaintenance;
 async function beforeImages() {
@@ -24,7 +24,7 @@ async function beforeImages() {
 const dev = process.argv.includes('--dev');
 const send = event => { if (window && !window.isDestroyed()) window.webContents.send('library:event', { ...event, generation }); };
 const settingsFile = () => path.join(app.getPath('userData'), 'settings.json');
-const saveRecent = async () => fs.writeFile(settingsFile(), JSON.stringify({ recent, sharingEnabled })).catch(() => {});
+const saveRecent = async () => fs.writeFile(settingsFile(), JSON.stringify({ recent, lastRoot, sharingEnabled })).catch(() => {});
 
 async function openRoot(folder, useCache = true) {
   if (typeof folder !== 'string' || !path.isAbsolute(folder)) throw new Error('Choose an absolute folder path.');
@@ -35,6 +35,7 @@ async function openRoot(folder, useCache = true) {
   generation++; root = folder; scanning = true;
   if (!refresh) { items = new Map(); snapshot = null; }
   send({ type: 'start', root, refresh });
+  lastRoot = root;
   recent = [root, ...recent.filter(p => p !== root)].slice(0, 8); await saveRecent();
   const cacheKey = crypto.createHash('sha256').update(root).digest('hex');
   const current = generation;
@@ -60,7 +61,7 @@ function indexed(id) {
 
 app.whenReady().then(async () => {
   await fs.mkdir(app.getPath('userData'), { recursive: true });
-  try { const data = JSON.parse(await fs.readFile(settingsFile(), 'utf8')); recent = (data.recent || []).filter(p => typeof p === 'string').slice(0, 8); sharingEnabled = data.sharingEnabled !== false; } catch {}
+  try { const data = JSON.parse(await fs.readFile(settingsFile(), 'utf8')); recent = (data.recent || []).filter(p => typeof p === 'string').slice(0, 8); lastRoot = typeof data.lastRoot === 'string' ? data.lastRoot : recent[0] || ''; sharingEnabled = data.sharingEnabled !== false; } catch {}
   const cacheDir = path.join(app.getPath('userData'), 'thumbnails');
   service = new ImageService(cacheDir);
   const libraryState = () => {
@@ -152,6 +153,7 @@ app.whenReady().then(async () => {
   if (dev) await window.loadURL('http://127.0.0.1:5173');
   else await window.loadFile(path.join(__dirname, '..', 'dist', 'index.html'));
   const argument = process.argv.find(arg => arg.startsWith('--folder='));
-  if (argument) await enqueueOpen(argument.slice(9), true).catch(error => send({ type: 'error', message: error.message }));
+  const startupFolder = argument ? argument.slice(9) : lastRoot;
+  if (startupFolder) await enqueueOpen(startupFolder, true).catch(error => send({ type: 'error', message: `Unable to reopen folder: ${error.message}` }));
 });
 app.on('window-all-closed', () => { void sharing?.stop(); worker?.terminate(); cacheWorker?.terminate(); app.quit(); });

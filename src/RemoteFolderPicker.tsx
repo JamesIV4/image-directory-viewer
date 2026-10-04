@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { FolderOpen, X } from 'lucide-react';
+import { screenEdge, useTouchSwipe } from './touch-swipe';
 export type FolderListing = { path: string; parent: string | null; folders: { name: string; path: string }[] };
 export default function RemoteFolderPicker({ initial, browse, choose }: { initial: string; browse(path: string): Promise<FolderListing>; choose(path?: string): void }) {
   const [listing, setListing] = useState<FolderListing | null>(null), [path, setPath] = useState(initial);
@@ -12,7 +13,24 @@ export default function RemoteFolderPicker({ initial, browse, choose }: { initia
     browse(target).then(data => { if (alive) { setListing(data); setPath(data.path); } }).catch(error => { if (alive) setError(error.message); }).finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
   }, [target, revision, browse]);
-  const navigate = (path: string) => { setTarget(path); setRevision(value => value + 1); };
+  const history = useRef({ entries: [initial], index: 0 });
+  const navigate = (path: string) => {
+    history.current.entries.splice(history.current.index + 1);
+    history.current.entries.push(path); history.current.index++;
+    setTarget(path); setRevision(value => value + 1);
+  };
+  useTouchSwipe(null, x => {
+    const edge = screenEdge(x);
+    if (!edge) return null;
+    return direction => {
+      const delta = edge === 'left' && direction === 'right' ? -1 : edge === 'right' && direction === 'left' ? 1 : 0;
+      if (!delta) return;
+      const index = history.current.index + delta;
+      if (index < 0) { choose(); return; }
+      if (index >= history.current.entries.length) return;
+      history.current.index = index; setTarget(history.current.entries[index]); setRevision(value => value + 1);
+    };
+  }, true);
   return <div className="remote-folder-backdrop" onKeyDown={event => {
     event.stopPropagation();
     if (event.key === 'Escape') choose();

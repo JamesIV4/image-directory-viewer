@@ -165,6 +165,10 @@ test('automatically connect, browse originals, reconnect, cache shell and revoke
     await mobile.waitForTimeout(5500);
     await expect(mobile.getByRole('heading', { name: 'A window into your PC.' })).toBeVisible();
     await mobile.getByRole('button', { name: 'Find Lumen automatically' }).click();
+    // Reconnecting preserves the selected subfolder.
+    await expect(mobile.locator('.image-card')).toHaveCount(1);
+    await expect(mobile.locator('.image-card')).toContainText('Green');
+    await mobile.locator('.breadcrumb').getByRole('button', { name: path.basename(root), exact: true }).click();
     await expect(mobile.locator('.image-card')).toHaveCount(2);
     await sharp({ create: { width: 40, height: 30, channels: 3, background: '#aa7755' } }).png().toFile(path.join(root, 'Added.png'));
     await mobile.getByRole('button', { name: 'Refresh library', exact: true }).click();

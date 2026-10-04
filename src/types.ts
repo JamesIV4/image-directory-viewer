@@ -13,7 +13,7 @@ export type IndexEvent = { generation: number } & (
 declare global {
   interface Window {
     lumen: {
-      remote?: { disconnect(): void };
+      remote?: { base: string; disconnect(): void };
       mediaUrl?(kind: 'thumb' | 'image', id: string): string;
       sharingState(): Promise<{ active: boolean; token: string; addresses: string[] }>;
       setSharing(active: boolean): Promise<{ active: boolean; token: string; addresses: string[] }>;

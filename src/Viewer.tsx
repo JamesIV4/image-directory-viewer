@@ -4,6 +4,7 @@ import { ArrowLeft, ChevronLeft, ChevronRight, Copy, FolderOpen, Maximize, Minim
 import { original, bytes, type ImageItem, type Metadata } from './types';
 import { Download } from 'lucide-react';
 import SaveImage from './SaveImage';
+import { screenEdge, useTouchSwipe } from './touch-swipe';
 
 type Dimensions = { width: number; height: number };
 
@@ -85,6 +86,19 @@ export default function Viewer({ item, index, count, onClose, onPrevious, onNext
     const scale = fitScale();
     transform.current.setTransform((stage.current.clientWidth - dimensions.width * scale) / 2, (stage.current.clientHeight - dimensions.height * scale) / 2, scale, duration);
   }, [dimensions, fitScale]);
+  useTouchSwipe(stage, (x, _y, target) => {
+    // The zoom library disables pointer events on img, so its content wrapper
+    // is the touch target over the image.
+    if (screenEdge(x) || !ready || saveId === item.id || !(target instanceof Element) || !target.closest('.zoom-content')) return null;
+    const fitted = fitScale();
+    const currentScale = transform.current?.state.scale ?? scale;
+    if (currentScale > Math.min(fitted, 1) * 1.01 && Math.abs(currentScale - fitted) > fitted * 0.01) return null;
+    return direction => {
+      if (direction === 'left') onNext();
+      else if (direction === 'right') onPrevious();
+      else onClose();
+    };
+  });
   const actual = useCallback(() => {
     if (!stage.current || !dimensions) return;
     transform.current?.setTransform((stage.current.clientWidth - dimensions.width) / 2, (stage.current.clientHeight - dimensions.height) / 2, 1, 220);
@@ -169,7 +183,7 @@ export default function Viewer({ item, index, count, onClose, onPrevious, onNext
         <i /><button className="text-button" title="Fit to window (F / 0)" disabled={!ready} onClick={() => fit()}><Scan size={16} />Fit</button>
         <button className="text-button" title="Actual size (1)" disabled={!ready} onClick={actual}>1:1</button>
         <i /><button className={`text-button nearest-toggle ${nearestNeighbor ? 'active' : ''}`} title="Nearest neighbor above 100% zoom (N)" aria-label="Nearest neighbor" aria-pressed={nearestNeighbor} onClick={() => setNearestNeighbor(value => !value)}><Grid2X2 size={15} /><span>Nearest</span></button>
-      </div><span className="viewer-hint">Scroll to zoom · Drag to pan</span>
+      </div><span className="viewer-hint">{window.lumen.remote ? 'Pinch to zoom · Swipe at fit to browse or close' : 'Scroll to zoom · Drag to pan'}</span>
     </footer>
   </div>;
 }
