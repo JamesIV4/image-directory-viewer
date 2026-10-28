@@ -17,8 +17,10 @@ function saved<T>(key: string, fallback: T): T {
 
 export default function App() {
   const [stored] = useState(readBrowsing);
-  const [initial] = useState(() => ({ ...defaultBrowsing(), ...stored.libraries[stored.lastRoot] }));
+  const [initial] = useState(() => ({ ...defaultBrowsing(), ...stored.libraries[stored.lastRoot], sort: 'modified', descending: true }));
   const activeRoot = useRef(stored.lastRoot);
+  const firstRoot = useRef(true);
+  const remoteStartupRoot = useRef(window.lumen.remote ? stored.lastRoot : '');
   const [root, setRoot] = useState(''), [recent, setRecent] = useState<string[]>([]);
   const [items, setItems] = useState<ImageItem[]>([]), [folders, setFolders] = useState<Folder[]>([]);
   const [scanning, setScanning] = useState(false), [directories, setDirectories] = useState(0);
@@ -71,9 +73,17 @@ export default function App() {
   }, [controlsCollapsed]);
   const deferredQuery = useDeferredValue(query);
   const activateRoot = useCallback((nextRoot: string) => {
-    if (!nextRoot || activeRoot.current === nextRoot) return;
+    if (!nextRoot) return;
+    if (activeRoot.current === nextRoot) {
+      firstRoot.current = false;
+      if (remoteStartupRoot.current === nextRoot) remoteStartupRoot.current = '';
+      return;
+    }
     activeRoot.current = nextRoot;
     const state = { ...defaultBrowsing(), ...readBrowsing().libraries[nextRoot] };
+    if (firstRoot.current || remoteStartupRoot.current === nextRoot) { state.sort = 'modified'; state.descending = true; }
+    if (remoteStartupRoot.current === nextRoot) remoteStartupRoot.current = '';
+    firstRoot.current = false;
     setFolder(state.folder); setRecursive(state.recursive); setFolderRules(new Map(state.folderRules));
     setExcludedDirectImages(new Set(state.excludedDirectImages));
     setIncludeFolders(state.includeFolders); setExcludeFolders(state.excludeFolders);
@@ -148,7 +158,6 @@ export default function App() {
   }, [applySnapshot, activateRoot, stored]);
   useEffect(() => { localStorage.setItem('lumen.view', JSON.stringify(view)); }, [view]);
   useEffect(() => { localStorage.setItem('lumen.size', JSON.stringify(size)); }, [size]);
-  useEffect(() => { localStorage.setItem('lumen.sort', JSON.stringify(sort)); }, [sort]);
   useEffect(() => { if (toast) { const timer = setTimeout(() => setToast(''), 2800); return () => clearTimeout(timer); } }, [toast]);
   const open = useCallback(async (path?: string) => {
     try { const result = await window.lumen.openFolder(path); if (result) setRecent(result.recent); }

@@ -22,7 +22,7 @@ export function defaultBrowsing(): BrowsingState {
   return { folder: '', recursive: true, folderRules: [], excludedDirectImages: [],
     includeFolders: saved('lumen.includeFolders', ''), excludeFolders: saved('lumen.excludeFolders', ''),
     query: '', extension: 'all', newerThan: '', olderThan: '', dateBoundsInclusive: false, dateFiltersOpen: false,
-    descending: false, sort: saved('lumen.sort', 'name'), view: saved('lumen.view', 'grid'),
+    descending: true, sort: 'modified', view: saved('lumen.view', 'grid'),
     size: saved('lumen.size', window.lumen.remote && window.innerWidth <= 600 ? 150 : 230),
     controlsCollapsed: saved('lumen.controlsCollapsed', false) };
 }

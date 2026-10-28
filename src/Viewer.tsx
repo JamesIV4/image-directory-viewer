@@ -87,9 +87,9 @@ export default function Viewer({ item, index, count, onClose, onPrevious, onNext
     transform.current.setTransform((stage.current.clientWidth - dimensions.width * scale) / 2, (stage.current.clientHeight - dimensions.height * scale) / 2, scale, duration);
   }, [dimensions, fitScale]);
   useTouchSwipe(stage, (x, _y, target) => {
-    // The zoom library disables pointer events on img, so its content wrapper
-    // is the touch target over the image.
-    if (screenEdge(x) || !ready || saveId === item.id || !(target instanceof Element) || !target.closest('.zoom-content')) return null;
+    // Accept touches on both the fitted image and its surrounding viewer area.
+    // The wrapper excludes navigation buttons and other viewer controls.
+    if (screenEdge(x) || !ready || saveId === item.id || !(target instanceof Element) || !target.closest('.zoom-wrapper')) return null;
     const fitted = fitScale();
     const currentScale = transform.current?.state.scale ?? scale;
     if (currentScale > Math.min(fitted, 1) * 1.01 && Math.abs(currentScale - fitted) > fitted * 0.01) return null;

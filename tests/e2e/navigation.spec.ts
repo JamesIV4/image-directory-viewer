@@ -23,22 +23,84 @@ async function fixture() {
   return { profile, root };
 }
 
-test('touch swipes browse fitted images, dismiss vertically, preserve zoomed pan and pinch, and navigate edges everywhere', async () => {
+test('launch shows newest modified images first even after a different saved sort', async () => {
   const { profile, root } = await fixture();
+  await fs.utimes(path.join(root, 'A.png'), new Date('2020-01-01'), new Date('2020-01-01'));
+  await fs.utimes(path.join(root, 'B.png'), new Date('2022-01-01'), new Date('2022-01-01'));
+  await fs.utimes(path.join(root, 'Nested/C.png'), new Date('2021-01-01'), new Date('2021-01-01'));
+  const env = { ...process.env, LUMEN_TEST_DATA: profile, LUMEN_TEST_SHARE_PORT: '47832' };
+  let app = await electron.launch({ args: ['.', `--folder=${root}`], env });
+  try {
+    let page = await app.firstWindow();
+    await expect(page.locator('.image-card')).toHaveCount(3);
+    await expect(page.locator('.image-card').first()).toContainText('B.png');
+    await page.getByRole('combobox', { name: 'Sort images' }).selectOption('name');
+    await page.getByRole('button', { name: 'Sort ascending', exact: true }).click();
+    await expect(page.locator('.image-card').first()).toContainText('A.png');
+    await app.close();
+    app = await electron.launch({ args: ['.'], env });
+    page = await app.firstWindow();
+    await expect(page.locator('.image-card')).toHaveCount(3);
+    await expect(page.getByRole('combobox', { name: 'Sort images' })).toHaveValue('modified');
+    await expect(page.getByRole('button', { name: 'Sort ascending', exact: true })).toBeVisible();
+    await expect(page.locator('.image-card').first()).toContainText('B.png');
+  } finally { await app.close(); }
+});
+
+test('network client starts with newest images when restoring its library from a different host folder', async () => {
+  const { profile, root } = await fixture();
+  await fs.utimes(path.join(root, 'A.png'), new Date('2020-01-01'), new Date('2020-01-01'));
+  await fs.utimes(path.join(root, 'B.png'), new Date('2022-01-01'), new Date('2022-01-01'));
+  await fs.utimes(path.join(root, 'Nested/C.png'), new Date('2021-01-01'), new Date('2021-01-01'));
+  const other = path.join(profile, 'Other'); await fs.mkdir(other);
+  await sharp({ create: { width: 20, height: 20, channels: 3, background: '#9955aa' } }).png().toFile(path.join(other, 'Other.png'));
   const app = await electron.launch({ args: ['.', `--folder=${root}`], env: { ...process.env, LUMEN_TEST_DATA: profile, LUMEN_TEST_SHARE_PORT: '47832' } });
   const browser = await chromium.launch();
   try {
     const desktop = await app.firstWindow();
     await expect(desktop.locator('.image-card')).toHaveCount(3);
-    const context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
+    const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+    const mobile = await context.newPage(); await mobile.goto('http://127.0.0.1:47832');
+    await expect(mobile.locator('.image-card')).toHaveCount(3);
+    await expect(mobile.locator('.image-card').first()).toContainText('B.png');
+    await mobile.getByRole('combobox', { name: 'Sort images' }).selectOption('name');
+    await mobile.getByRole('button', { name: 'Sort ascending', exact: true }).click();
+    await expect(mobile.locator('.image-card').first()).toContainText('A.png');
+    await mobile.close();
+    await desktop.evaluate(async folder => { await window.lumen.openFolder(folder); }, other);
+    await expect(desktop.locator('.image-card')).toContainText('Other.png');
+    const reopened = await context.newPage(); await reopened.goto('http://127.0.0.1:47832');
+    await expect(reopened.locator('.image-card')).toHaveCount(3);
+    await expect(reopened.getByRole('combobox', { name: 'Sort images' })).toHaveValue('modified');
+    await expect(reopened.locator('.image-card').first()).toContainText('B.png');
+  } finally { await browser.close(); await app.close(); }
+});
+
+test('touch swipes browse fitted images, dismiss vertically, preserve zoomed pan and pinch, and navigate edges everywhere', async () => {
+  const { profile, root } = await fixture();
+  const app = await electron.launch({ args: ['.', `--folder=${root}`], env: { ...process.env, LUMEN_TEST_DATA: profile, LUMEN_TEST_SHARE_PORT: '47832' } });
+  const browser = await chromium.launch({ args: ['--host-resolver-rules=MAP lumen.local:47831 127.0.0.1:47832'] });
+  try {
+    const desktop = await app.firstWindow();
+    await expect(desktop.locator('.image-card')).toHaveCount(3);
+    const context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true, permissions: ['local-network-access'], serviceWorkers: 'block' });
     const page = await context.newPage();
     const session = await context.newCDPSession(page);
-    await page.goto('http://127.0.0.1:47832');
+    const site = 'https://jamesiv4.github.io/image-directory-viewer/';
+    await page.route(site + '**', async route => {
+      const name = new URL(route.request().url()).pathname.slice('/image-directory-viewer/'.length) || 'index.html';
+      if (name === 'sw.js') return route.fulfill({ status: 404 });
+      const types: Record<string, string> = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.webmanifest': 'application/manifest+json', '.png': 'image/png' };
+      await route.fulfill({ body: await fs.readFile(path.resolve('dist-pwa', name)), contentType: types[path.extname(name)] });
+    });
+    await page.goto(site);
     await expect(page.locator('.image-card')).toHaveCount(3);
+    await page.getByRole('combobox', { name: 'Sort images' }).selectOption('name');
+    await page.getByRole('button', { name: 'Sort ascending', exact: true }).click();
     await page.locator('.image-card').first().click();
     await expect(page.locator('.original-image')).toHaveJSProperty('naturalWidth', 1200);
     await expect(page.locator('.zoom-value')).toHaveText('26%');
-    await swipe(session, [260, 410], [100, 410]);
+    await swipe(session, [260, 200], [100, 200]); // Outside the fitted image, within the viewer.
     await expect(page.locator('.viewer-title strong')).toHaveText('B.png');
     await expect(page.locator('.viewer-image-layer:visible img')).toHaveAttribute('alt', 'B.png');
     await expect(page.getByRole('button', { name: 'Fit', exact: true })).toBeEnabled();
@@ -104,7 +166,8 @@ test('touch swipes browse fitted images, dismiss vertically, preserve zoomed pan
 
 async function setFilters(page: Page) {
   await page.getByRole('combobox', { name: 'Sort images' }).selectOption('path');
-  await page.getByRole('button', { name: 'Sort descending', exact: true }).click();
+  if (await page.getByRole('button', { name: 'Sort descending', exact: true }).isVisible())
+    await page.getByRole('button', { name: 'Sort descending', exact: true }).click();
   await page.getByRole('textbox', { name: 'Search images' }).fill('C.');
   await page.getByRole('combobox', { name: 'Filter file type' }).selectOption('png');
   await page.getByRole('textbox', { name: 'Include folders', exact: true }).fill('Nested');
@@ -115,8 +178,8 @@ async function setFilters(page: Page) {
   await page.getByRole('button', { name: 'Details view', exact: true }).click();
 }
 
-async function expectFilters(page: Page) {
-  await expect(page.getByRole('combobox', { name: 'Sort images' })).toHaveValue('path');
+async function expectFilters(page: Page, sort = 'path') {
+  await expect(page.getByRole('combobox', { name: 'Sort images' })).toHaveValue(sort);
   await expect(page.getByRole('button', { name: 'Sort ascending', exact: true })).toBeVisible();
   await expect(page.getByRole('textbox', { name: 'Search images' })).toHaveValue('C.');
   await expect(page.getByRole('combobox', { name: 'Filter file type' })).toHaveValue('png');
@@ -148,7 +211,7 @@ test('desktop restart and mobile reload restore each library and all browsing fi
     let mobile = await context.newPage(); await mobile.goto('http://127.0.0.1:47832');
     await expect(mobile.locator('.image-card')).toHaveCount(3); // Desktop filters don't leak.
     await setFilters(mobile);
-    await mobile.reload(); await expectFilters(mobile);
+    await mobile.reload(); await expectFilters(mobile, 'modified');
     await mobile.close();
     await desktop.evaluate(async folder => { await window.lumen.openFolder(folder); }, other);
     await expect(desktop.locator('h1')).toContainText('All images');
@@ -156,16 +219,16 @@ test('desktop restart and mobile reload restore each library and all browsing fi
     await expect(desktop.locator('.image-card')).toHaveCount(1);
     // Reopening mobile restores its remembered library even if the host moved.
     mobile = await context.newPage(); await mobile.goto('http://127.0.0.1:47832');
-    await expectFilters(mobile);
+    await expectFilters(mobile, 'modified');
     await expectFilters(desktop);
     await app.close();
     app = await electron.launch({ args: ['.'], env }); // No --folder on restart.
     desktop = await app.firstWindow();
-    await expectFilters(desktop);
+    await expectFilters(desktop, 'modified');
     await expect(desktop.locator('h1')).toContainText('Nested');
     await expect(desktop.getByRole('checkbox', { name: 'Include subfolders', exact: true })).not.toBeChecked();
     await expect(desktop.getByRole('checkbox', { name: 'Include Nested', exact: true })).toBeChecked();
-    await mobile.reload(); await expectFilters(mobile);
+    await mobile.reload(); await expectFilters(mobile, 'modified');
     expect(JSON.parse(await fs.readFile(path.join(profile, 'settings.json'), 'utf8')).lastRoot).toBe(root);
   } finally { await browser.close(); await app.close(); }
 });

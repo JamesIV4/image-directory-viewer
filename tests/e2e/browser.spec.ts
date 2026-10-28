@@ -259,7 +259,12 @@ test('side mouse buttons navigate on release without panning, while left drag st
 });
 
 test('image navigation retains the original through decoding and skips stale loads without blank frames', async () => {
+  await page.getByRole('combobox', { name: 'Sort images' }).selectOption('name');
+  if (await page.getByRole('button', { name: 'Sort ascending', exact: true }).isVisible())
+    await page.getByRole('button', { name: 'Sort ascending', exact: true }).click();
   await page.locator('.tree-label').filter({ hasText: 'Landscapes' }).click();
+  await page.locator('.library').evaluate(element => { element.scrollTop = 0; });
+  await expect(page.locator('.image-card').first()).toContainText('Amethyst 10.jpg');
   await page.locator('.image-card').first().click();
   const visibleImage = page.locator('.original-image:visible');
   await expect(visibleImage).toHaveCount(1);
