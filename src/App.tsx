@@ -1,4 +1,4 @@
-import { useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import { Aperture, ArrowDownWideNarrow, ArrowUp, ArrowUpWideNarrow, Check, ChevronRight, FolderOpen, Folders, Grid2X2, Image, LayoutGrid, List, LoaderCircle, PanelLeftClose, PanelLeftOpen, RefreshCw, Search, X, Keyboard, CircleAlert, Copy, CornerDownLeft, CalendarClock, ChevronsUp, ChevronsDown, ListFilter } from 'lucide-react';
 import Library, { FolderTree, type View } from './Library';
 import Viewer from './Viewer';
@@ -11,6 +11,10 @@ import { defaultBrowsing, readBrowsing, writeBrowsing } from './browsing-state';
 import { screenEdge, useTouchSwipe } from './touch-swipe';
 
 const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+type RememberedLibrary = { paths: Set<string>; highlighted: Set<string> };
+type LibraryVisit = {
+  root: string; knownPaths?: Set<string>; highlighted: Set<string>; complete: boolean; useCachedPaths: boolean;
+};
 function saved<T>(key: string, fallback: T): T {
   try { return JSON.parse(localStorage.getItem(key) || 'null') ?? fallback; } catch { return fallback; }
 }
@@ -63,14 +67,11 @@ export default function App() {
   const search = useRef<HTMLInputElement>(null), generation = useRef(0), indexed = useRef(new Map<string, ImageItem>());
   const indexedFolders = useRef(new Map<string, Folder>());
   const scroller = useRef<HTMLDivElement>(null);
-  const pendingItems = useRef(new Map<string, ImageItem | null>()), pendingFolders = useRef(new Map<string, Folder | null>());
-  const promptAfterDetail = useRef(false);
-  const [watchRevision, setWatchRevision] = useState(0);
-  const clearPending = useCallback(() => {
-    pendingItems.current.clear(); pendingFolders.current.clear();
-    promptAfterDetail.current = false;
-    setWatchRevision(revision => revision + 1);
-  }, []);
+  const queued = useRef(new Map<string, ImageItem>());
+  const [queuedImages, setQueuedImages] = useState<ImageItem[]>([]);
+  const [lastAddedPaths, setLastAddedPaths] = useState<Set<string>>(() => new Set());
+  const recentLibraries = useRef(new Map<string, RememberedLibrary>());
+  const visit = useRef<LibraryVisit>({ root: '', highlighted: lastAddedPaths, complete: false, useCachedPaths: false });
   const focusSearchPending = useRef(false);
   useEffect(() => {
     if (!controlsCollapsed && focusSearchPending.current) {
@@ -109,21 +110,64 @@ export default function App() {
     });
   }, [root, folder, recursive, folderRules, excludedDirectImages, includeFolders, excludeFolders, query, extension,
     newerThan, olderThan, dateBoundsInclusive, dateFiltersOpen, descending, sort, view, size, controlsCollapsed]);
-  const applySnapshot = useCallback((data: Snapshot) => {
-    activateRoot(data.root);
-    clearPending();
-    indexed.current = new Map(data.items.map(item => [item.path, item]));
+  const highlight = useCallback((paths: Set<string>) => {
+    visit.current.highlighted = paths;
+    const remembered = recentLibraries.current.get(visit.current.root);
+    if (remembered) remembered.highlighted = paths;
+    setLastAddedPaths(paths);
+  }, []);
+  const enterLibrary = useCallback((nextRoot: string, refresh = false, manual = refresh) => {
+    const previous = visit.current;
+    const remembered = recentLibraries.current;
+    if (previous.complete && previous.root && (refresh || previous.root !== nextRoot)) {
+      remembered.delete(previous.root);
+      remembered.set(previous.root, { paths: new Set(indexed.current.keys()), highlighted: previous.highlighted });
+      // Match the desktop's recent-folder limit without retaining full snapshots.
+      if (remembered.size > 8) remembered.delete(remembered.keys().next().value!);
+    }
+    if (previous.root === nextRoot) {
+      if (refresh) {
+        previous.knownPaths = manual ? undefined : remembered.get(nextRoot)?.paths ?? previous.knownPaths;
+        previous.complete = false;
+        previous.useCachedPaths = false;
+      }
+      if (manual) highlight(new Set());
+      return;
+    }
+    const prior = manual ? undefined : remembered.get(nextRoot);
+    const highlighted = prior?.highlighted ?? new Set<string>();
+    visit.current = { root: nextRoot, knownPaths: prior?.paths, highlighted, complete: false,
+      useCachedPaths: !manual && !!previous.root && !prior };
+    highlight(highlighted);
+    activateRoot(nextRoot);
+  }, [activateRoot, highlight]);
+  const applySnapshot = useCallback((data: Snapshot, complete: boolean) => {
+    enterLibrary(data.root);
+    const current = visit.current;
+    // Network polling can send partial scans with scannedAt set to zero.
+    if (!complete && current.useCachedPaths && data.scannedAt > 0) {
+      current.knownPaths = new Set(data.items.map(item => item.path));
+      current.useCachedPaths = false;
+    }
+    const shown = new Map<string, ImageItem>(), pending = new Map<string, ImageItem>();
+    for (const item of data.items) {
+      if (!current.knownPaths || current.knownPaths.has(item.path)) shown.set(item.path, item);
+      else if (complete) pending.set(item.path, item);
+    }
+    current.complete = complete;
+    indexed.current = shown; queued.current = pending;
+    setQueuedImages([...pending.values()]);
     indexedFolders.current = new Map(data.folders.map(folder => [folder.path, folder]));
-    setItems(data.items); setFolders(data.folders); setWarnings(data.warnings); setRoot(data.root);
-  }, [activateRoot, clearPending]);
+    setItems(current.knownPaths ? [...shown.values()] : data.items); setFolders(data.folders); setWarnings(data.warnings); setRoot(data.root);
+  }, [enterLibrary]);
   useEffect(() => {
     let alive = true, dirty = false;
     const unsubscribe = window.lumen.onIndex(event => {
       if (event.generation < generation.current) return;
       generation.current = event.generation;
       if (event.type === 'start') {
-        activateRoot(event.root);
-        clearPending();
+        enterLibrary(event.root, event.refresh, event.manual);
+        queued.current.clear(); setQueuedImages([]);
         dirty = false; setRoot(event.root);
         if (!event.refresh) {
           indexed.current.clear(); indexedFolders.current.clear(); setItems([]); setFolders([]); setContextMenu(null);
@@ -131,19 +175,42 @@ export default function App() {
         }
         setScanning(true); setWarnings([]); setError(''); setDirectories(0);
       } else if (event.type === 'batch') {
-        for (const item of event.items) indexed.current.set(item.path, item);
-        dirty = true;
+        const knownPaths = visit.current.knownPaths;
+        for (const item of event.items) if (!knownPaths || knownPaths.has(item.path)) {
+          indexed.current.set(item.path, item);
+          dirty = true;
+        }
       } else if (event.type === 'progress') setDirectories(event.directories);
       else if (event.type === 'update') {
-        for (const item of event.removed) pendingItems.current.set(item.path, null);
-        for (const item of event.items) pendingItems.current.set(item.path, item);
-        for (const path of event.removedFolders) pendingFolders.current.set(path, null);
-        for (const folder of event.folders) pendingFolders.current.set(folder.path, folder);
+        let itemsChanged = false, queueChanged = false, foldersChanged = false;
+        const replacements = new Set(event.items.map(item => item.path));
+        for (const { path } of event.removed) {
+          if (replacements.has(path)) continue;
+          if (indexed.current.delete(path)) itemsChanged = true;
+          if (queued.current.delete(path)) queueChanged = true;
+        }
+        for (const item of event.items) {
+          if (indexed.current.has(item.path)) {
+            indexed.current.set(item.path, item);
+            itemsChanged = true;
+          } else {
+            queued.current.set(item.path, item);
+            queueChanged = true;
+          }
+        }
+        // Folder counts shown in the sidebar come from the images already in the gallery.
+        for (const path of event.removedFolders) if (indexedFolders.current.delete(path)) foldersChanged = true;
+        for (const folder of event.folders) if (indexedFolders.current.get(folder.path)?.name !== folder.name) {
+          indexedFolders.current.set(folder.path, folder);
+          foldersChanged = true;
+        }
+        if (itemsChanged) setItems([...indexed.current.values()]);
+        if (queueChanged) setQueuedImages([...queued.current.values()]);
+        if (foldersChanged) setFolders([...indexedFolders.current.values()]);
         if (event.warnings) setWarnings(event.warnings);
-        setWatchRevision(revision => revision + 1);
       }
       else if (event.type === 'cached' || event.type === 'complete') {
-        dirty = false; applySnapshot(event.data);
+        dirty = false; applySnapshot(event.data, event.type === 'complete');
         if (event.type === 'complete') setScanning(false);
       } else if (event.type === 'error') { setError(event.message); setScanning(false); }
     });
@@ -168,15 +235,15 @@ export default function App() {
       setRecent(state.recent);
       if (state.generation < generation.current) return;
       generation.current = state.generation;
-      activateRoot(state.root); setRoot(state.root); setScanning(state.scanning);
-      if (state.snapshot) applySnapshot(state.snapshot);
+      enterLibrary(state.root); setRoot(state.root); setScanning(state.scanning);
+      if (state.snapshot) applySnapshot(state.snapshot, !state.scanning);
       // Remote clients remember their own last library, scoped to the paired PC.
       if (window.lumen.remote && stored.lastRoot && state.root !== stored.lastRoot) {
         void window.lumen.openFolder(stored.lastRoot).catch(error => { if (alive) setError(error.message); });
       }
     }).catch(error => setError(error.message));
     return () => { alive = false; clearInterval(timer); unsubscribe(); };
-  }, [applySnapshot, activateRoot, clearPending, stored]);
+  }, [applySnapshot, enterLibrary, stored]);
   useEffect(() => { localStorage.setItem('lumen.view', JSON.stringify(view)); }, [view]);
   useEffect(() => { localStorage.setItem('lumen.size', JSON.stringify(size)); }, [size]);
   useEffect(() => { if (toast) { const timer = setTimeout(() => setToast(''), 2800); return () => clearTimeout(timer); } }, [toast]);
@@ -186,25 +253,32 @@ export default function App() {
   }, []);
   const refresh = useCallback(() => {
     if (!viewer) setSelected('');
+    highlight(new Set());
     setScrollReset(value => value + 1);
     void window.lumen.rescan().catch(error => setError(error.message));
-  }, [viewer]);
+  }, [viewer, highlight]);
   const extensions = useMemo(() => [...new Set(items.map(i => i.extension))].sort(), [items]);
   const includesFolder = useCallback((path: string) => folderIncluded(path, folderRules)
     && folderPatternIncluded(path) && !excludedDirectImages.has(path), [folderRules, folderPatternIncluded, excludedDirectImages]);
-  const { includedFolders, includedCounts } = useMemo(() => {
+  const { includedFolders, includedCounts, galleryFolders } = useMemo(() => {
     const includedFolders = new Set<string>();
     const includedCounts = new Map<string, number>();
+    const folderCounts = new Map(folders.map(folder => [folder.path, { ...folder, count: 0, ownCount: 0 }]));
     for (const entry of folders) if (includesFolder(entry.path)) includedFolders.add(entry.path);
-    for (const item of items) if (includedFolders.has(item.folder)) {
+    for (const item of items) {
+      const directFolder = folderCounts.get(item.folder);
+      if (directFolder) directFolder.ownCount++;
+      const included = includedFolders.has(item.folder);
       let current = item.folder;
       while (true) {
-        includedCounts.set(current, (includedCounts.get(current) || 0) + 1);
+        const folder = folderCounts.get(current);
+        if (folder) folder.count++;
+        if (included) includedCounts.set(current, (includedCounts.get(current) || 0) + 1);
         if (!current) break;
         const slash = current.lastIndexOf('/'); current = slash < 0 ? '' : current.slice(0, slash);
       }
     }
-    return { includedFolders, includedCounts };
+    return { includedFolders, includedCounts, galleryFolders: [...folderCounts.values()] };
   }, [items, folders, includesFolder]);
   const hiddenInScope = useMemo(() => items.filter(item => !includedFolders.has(item.folder)
     && (recursive ? (!folder || item.folder === folder || item.folder.startsWith(folder + '/')) : item.folder === folder)).length,
@@ -232,44 +306,24 @@ export default function App() {
   const matchesDate = useCallback((item: ImageItem) => dateBoundsInclusive
     ? item.modified >= after && item.modified <= before : item.modified > after && item.modified < before, [after, before, dateBoundsInclusive]);
   const filtered = useMemo(() => eligibleItems.filter(matchesDate), [eligibleItems, matchesDate]);
-  const newImageCount = useMemo(() => {
-    let count = 0;
-    for (const [path, item] of pendingItems.current) {
-      if (item && !indexed.current.has(path) && includesFolder(item.folder) && matchesCollection(item) && matchesDate(item)) count++;
-    }
-    return count;
-  }, [watchRevision, includesFolder, matchesCollection, matchesDate]);
-  const applyWatchedChanges = useCallback(() => {
-    if (!pendingItems.current.size && !pendingFolders.current.size) return;
-    if (pendingItems.current.size) {
-      for (const [path, item] of pendingItems.current) {
-        if (item) indexed.current.set(path, item);
-        else indexed.current.delete(path);
-      }
-      setItems([...indexed.current.values()]);
-    }
-    if (pendingFolders.current.size) {
-      for (const [path, folder] of pendingFolders.current) {
-        if (folder) indexedFolders.current.set(path, folder);
-        else indexedFolders.current.delete(path);
-      }
-      setFolders([...indexedFolders.current.values()]);
-    }
-    clearPending();
-  }, [clearPending]);
-  const applyAtTop = useCallback(() => {
-    if (!viewer && (scroller.current?.scrollTop ?? 0) <= 1) applyWatchedChanges();
-  }, [viewer, applyWatchedChanges]);
-  useLayoutEffect(() => {
-    if (!newImageCount) applyWatchedChanges();
-    // Returning from detail should announce arrivals even if the gallery is already at the top.
-    else if (viewer) promptAfterDetail.current = true;
-    else if (!promptAfterDetail.current) applyAtTop();
-  }, [watchRevision, newImageCount, filtered.length, viewer, applyAtTop, applyWatchedChanges]);
+  const matchingNewImages = useMemo(() => queuedImages.filter(item => includesFolder(item.folder) && matchesCollection(item) && matchesDate(item)),
+    [queuedImages, includesFolder, matchesCollection, matchesDate]);
+  const newImageCount = matchingNewImages.length;
   const showNewImages = () => {
+    const paths = new Set<string>();
+    for (const { path } of matchingNewImages) {
+      const item = queued.current.get(path);
+      if (!item) continue;
+      queued.current.delete(path);
+      indexed.current.set(path, item);
+      paths.add(path);
+    }
+    if (!paths.size) return;
     scroller.current?.focus({ preventScroll: true });
     scroller.current?.scrollTo({ top: 0, behavior: 'instant' });
-    applyWatchedChanges();
+    highlight(paths);
+    setQueuedImages([...queued.current.values()]);
+    setItems([...indexed.current.values()]);
   };
   const selectedIndex = filtered.findIndex(item => item.id === selected);
   const current = selectedIndex >= 0 ? filtered[selectedIndex] : null;
@@ -423,7 +477,7 @@ export default function App() {
       <div className="sidebar-label"><span className="eyebrow">LIBRARY</span><button className="icon-button" title="Hide sidebar" aria-label="Hide sidebar" onClick={() => setSidebar(false)}><PanelLeftClose size={16} /></button></div>
       <button className={`all-images ${folder === '' && recursive ? 'active' : ''}`} onClick={() => { chooseFolder(''); setRecursive(true); }}><Image size={18} /><span>All images</span><small>{items.length.toLocaleString()}</small></button>
       <div className="sidebar-section"><span className="eyebrow">FOLDERS</span>{hasFolderFilters ? <button className="folder-reset" aria-label="Include all folders" title="Include all folders and direct images" onClick={resetFolderFilters}>Reset</button> : scanning && <LoaderCircle className="spin" size={13} />}</div>
-      {root ? <FolderTree key={root} folders={folders} selected={folder} onSelect={chooseFolder} rootLabel={rootName(root)} rules={folderRules} counts={includedCounts} patternIncluded={folderPatternIncluded}
+      {root ? <FolderTree key={root} folders={galleryFolders} selected={folder} onSelect={chooseFolder} rootLabel={rootName(root)} rules={folderRules} counts={includedCounts} patternIncluded={folderPatternIncluded}
         onInclusionChange={setFolderBranch} /> : <p className="sidebar-empty">Open a folder to explore its images.</p>}
       <div className="recent-folders"><span className="eyebrow">RECENT FOLDERS</span>
         {recent.length ? recent.slice(0, 5).map(path => <button key={path} title={path} onClick={() => void open(path)}><FolderOpen size={14} /><span>{rootName(path)}</span></button>) : <span className="muted">Your folders will appear here.</span>}
@@ -510,7 +564,7 @@ export default function App() {
           <ArrowUp size={17} aria-hidden="true" />{newImageCount.toLocaleString()} New {newImageCount === 1 ? 'Image' : 'Images'}
         </button>}
         {filtered.length ? <Library key={`${root}:${folder}:${recursive}:${extension}:${deferredQuery}:${sort}:${descending}:${[...folderRules].map(([p, included]) => `${p}=${included}`).join('|')}:${[...excludedDirectImages].join('|')}`} items={filtered} view={view} size={size} selected={selected} onSelect={setSelected}
-          scroller={scroller} onScroll={applyAtTop} scrollReset={scrollReset} onOpen={item => { setSelected(item.id); setViewer(true); }} onFolder={chooseFolder}
+          scroller={scroller} lastAddedPaths={lastAddedPaths} scrollReset={scrollReset} onOpen={item => { setSelected(item.id); setViewer(true); }} onFolder={chooseFolder}
           onContextMenu={(item, x, y) => { setSelected(item.id); setContextMenu({ item, x, y }); }} /> :
           <div className="no-results">{scanning ? <><LoaderCircle size={36} className="spin" /><h2>Discovering your images…</h2><p>You can browse as soon as the first images are indexed.</p></> : <><Search size={36} /><h2>{items.length ? 'No matching images' : 'No images in this folder'}</h2>{items.length > 0 && <p>Try another search, date range, file type, or folder.</p>}{(query || extension !== 'all' || !recursive || newerThan || olderThan) && <button className="button" onClick={() => { setQuery(''); setExtension('all'); setRecursive(true); setNewerThan(''); setOlderThan(''); }}>Reset filters</button>}</>}</div>}
         </div>

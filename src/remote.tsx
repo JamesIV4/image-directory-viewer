@@ -116,8 +116,9 @@ function Connected({ connection, disconnect }: { connection: Connection; disconn
       if (!next) throw new Error('Library unavailable');
       if (!alive) return next;
       const nextStamp = JSON.stringify([next.generation, next.scanning, next.snapshot?.scannedAt, next.snapshot?.items.length]);
-      if (last && last.root !== next.root) emit({ type: 'start', root: next.root, refresh: false, generation: next.generation });
-      else if (last && !last.scanning && next.scanning) emit({ type: 'start', root: next.root, refresh: true, generation: next.generation });
+      if (last && (last.root !== next.root || last.generation !== next.generation || (!last.scanning && next.scanning))) {
+        emit({ type: 'start', root: next.root, refresh: last.root === next.root, manual: next.manualRefresh, generation: next.generation });
+      }
       if (nextStamp !== stamp && next.snapshot) {
         if (last?.snapshot && last.generation === next.generation && last.root === next.root && !last.scanning && !next.scanning) {
           emit({ ...snapshotUpdate(last.snapshot, next.snapshot), generation: next.generation });

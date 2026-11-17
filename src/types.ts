@@ -10,7 +10,7 @@ export interface LibraryUpdate {
 }
 export interface Metadata { width?: number; height?: number; format: string; pages: number; space?: string; hasAlpha: boolean }
 export type IndexEvent = { generation: number } & (
-  { type: 'start'; root: string; refresh: boolean } | { type: 'batch'; items: ImageItem[] } |
+  { type: 'start'; root: string; refresh: boolean; manual?: boolean } | { type: 'batch'; items: ImageItem[] } |
   { type: 'progress'; files: number; directories: number } |
   { type: 'cached' | 'complete'; data: Snapshot } | { type: 'error'; message: string } | LibraryUpdate
 );
@@ -21,7 +21,7 @@ declare global {
       mediaUrl?(kind: 'thumb' | 'image', id: string): string;
       sharingState(): Promise<{ active: boolean; token: string; addresses: string[] }>;
       setSharing(active: boolean): Promise<{ active: boolean; token: string; addresses: string[] }>;
-      getState(): Promise<{ root: string; recent: string[]; scanning: boolean; snapshot: Snapshot | null; generation: number }>;
+      getState(): Promise<{ root: string; recent: string[]; scanning: boolean; snapshot: Snapshot | null; generation: number; manualRefresh?: boolean }>;
       openFolder(path?: string): Promise<{ root: string; recent: string[] } | null>;
       rescan(): Promise<unknown>; cancel(): Promise<unknown>;
       metadata(id: string): Promise<Metadata>; reveal(id: string): Promise<void>; copyPath(id: string): Promise<void>;

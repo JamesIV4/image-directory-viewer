@@ -39,3 +39,30 @@ test('scan reports inaccessible roots without crashing', async () => {
   const result = await scan(path.join(os.tmpdir(), 'nonexistent-lumen-root-12345'));
   assert.equal(result.items.length, 0); assert.equal(result.warnings.length, 1);
 });
+
+test('concurrent branches retain folder totals and stream each image once', async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'lumen-index-branches-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const branches = [['large', 160], ['mixed', 128], ['mixed/nested', 120], ['small', 2], ['overflow', 120]];
+  for (const [folder, count] of branches) {
+    await fs.mkdir(path.join(root, folder), { recursive: true });
+    await Promise.all(Array.from({ length: count }, (_, i) => fs.writeFile(path.join(root, folder, `${i}.png`), 'test')));
+  }
+
+  const batches = [], progress = [];
+  const result = await scan(root, event => {
+    if (event.type === 'batch') batches.push(event.items);
+    if (event.type === 'progress') progress.push(event.directories);
+  });
+  assert.ok(batches.length > 1);
+  assert.equal(result.items.length, 530);
+  assert.deepEqual(batches.flat().map(item => item.id), result.items.map(item => item.id));
+  assert.equal(new Set(result.items.map(item => item.id)).size, result.items.length);
+  assert.deepEqual(progress, [...progress].sort((a, b) => a - b));
+  assert.equal(progress.at(-1), 6);
+  const byPath = new Map(result.folders.map(folder => [folder.path, folder]));
+  assert.equal(byPath.get('').count, 530);
+  assert.equal(byPath.get('mixed').ownCount, 128);
+  assert.equal(byPath.get('mixed').count, 248);
+  assert.equal(byPath.get('mixed/nested').count, 120);
+});

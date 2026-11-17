@@ -85,9 +85,9 @@ export function FolderTree({ folders, selected, onSelect, rootLabel, rules, coun
 }
 
 type Row = { type: 'images'; items: ImageItem[] } | { type: 'folder'; folder: string; count: number };
-export default function Library({ items, view, size, selected, scroller, scrollReset, onScroll, onSelect, onOpen, onFolder, onContextMenu }: {
+export default function Library({ items, view, size, selected, scroller, scrollReset, lastAddedPaths, onSelect, onOpen, onFolder, onContextMenu }: {
   items: ImageItem[]; view: View; size: number; selected: string; scrollReset: number; onSelect: (id: string) => void;
-  scroller: RefObject<HTMLDivElement | null>; onScroll: () => void;
+  scroller: RefObject<HTMLDivElement | null>; lastAddedPaths: ReadonlySet<string>;
   onOpen: (item: ImageItem) => void; onFolder: (path: string) => void;
   onContextMenu: (item: ImageItem, x: number, y: number) => void;
 }) {
@@ -123,7 +123,7 @@ export default function Library({ items, view, size, selected, scroller, scrollR
     if (index >= 0) virtual.scrollToIndex(index, { align: 'auto' });
   });
   useEffect(() => { scrollToSelected(); }, [selected, view, columns]);
-  return <div className={`library ${view}`} ref={scroller} onScroll={onScroll} tabIndex={-1} role="region" aria-label="Image collection">
+  return <div className={`library ${view}`} ref={scroller} tabIndex={-1} role="region" aria-label="Image collection">
     {view === 'list' && <div className="list-heading"><span>Image / name</span><span>Folder</span><span>File size</span><span>Modified</span></div>}
     <div style={{ height: virtual.getTotalSize(), position: 'relative' }}>
       {virtual.getVirtualItems().map(virtualRow => {
@@ -131,7 +131,7 @@ export default function Library({ items, view, size, selected, scroller, scrollR
         return <div key={virtualRow.key} className="image-row" style={{ transform: `translateY(${virtualRow.start}px)`, height: virtualRow.size, gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` }}>
           {row.type === 'folder' ? <button className="group-heading" onClick={() => onFolder(row.folder)} title={`Browse ${row.folder || 'root folder'}`}>
             <FolderIcon size={17} /><strong>{row.folder || 'Root folder'}</strong><span>{row.count.toLocaleString()} images</span><ChevronRight size={16} />
-          </button> : row.items.map(item => <button key={item.id} data-image-id={item.id} className={`image-card ${selected === item.id ? 'selected' : ''}`}
+          </button> : row.items.map(item => <button key={item.id} data-image-id={item.id} className={`image-card ${selected === item.id ? 'selected' : ''} ${lastAddedPaths.has(item.path) ? 'recently-added' : ''}`}
             aria-label={`View ${item.relativePath}`} title={item.relativePath} onFocus={() => onSelect(item.id)} onClick={() => { onSelect(item.id); onOpen(item); }}
             onContextMenu={event => { event.preventDefault(); const rect = event.currentTarget.getBoundingClientRect(); onContextMenu(item, event.clientX || rect.left + 20, event.clientY || rect.top + 20); }}
             onKeyDown={event => { if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) { event.preventDefault(); const rect = event.currentTarget.getBoundingClientRect(); onContextMenu(item, rect.left + 20, rect.top + 20); } }}>

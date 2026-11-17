@@ -13,6 +13,7 @@ if (process.env.LUMEN_TEST_DATA) app.setPath('userData', process.env.LUMEN_TEST_
 protocol.registerSchemesAsPrivileged([{ scheme: 'lumen', privileges: { standard: true, secure: true, supportFetchAPI: true } }]);
 let window, worker, cacheWorker, service, root = '', items = new Map(), snapshot = null, scanning = false, generation = 0;
 let watchedFolders;
+let manualRefresh = false;
 let recent = [], lastRoot = '';
 let sharingEnabled = true;
 let decoding = false, cacheMaintenance;
@@ -27,16 +28,16 @@ const send = event => { if (window && !window.isDestroyed()) window.webContents.
 const settingsFile = () => path.join(app.getPath('userData'), 'settings.json');
 const saveRecent = async () => fs.writeFile(settingsFile(), JSON.stringify({ recent, lastRoot, sharingEnabled })).catch(() => {});
 
-async function openRoot(folder, useCache = true) {
+async function openRoot(folder, useCache = true, manual = false) {
   if (typeof folder !== 'string' || !path.isAbsolute(folder)) throw new Error('Choose an absolute folder path.');
   folder = await fs.realpath(folder);
   if (!(await fs.stat(folder)).isDirectory()) throw new Error('Please drop or choose a folder.');
   if (worker) await worker.terminate();
   const refresh = root === folder;
-  generation++; root = folder; scanning = true;
+  generation++; root = folder; scanning = true; manualRefresh = manual;
   watchedFolders = null;
   if (!refresh) { items = new Map(); snapshot = null; }
-  send({ type: 'start', root, refresh });
+  send({ type: 'start', root, refresh, manual });
   lastRoot = root;
   recent = [root, ...recent.filter(p => p !== root)].slice(0, 8); await saveRecent();
   const cacheKey = crypto.createHash('sha256').update(root).digest('hex');
@@ -92,7 +93,7 @@ app.whenReady().then(async () => {
       }
       data = { root, items: [...items.values()], folders: [...folders.values()], warnings: [], scannedAt: 0 };
     }
-    return { root, recent, scanning, snapshot: data, generation };
+    return { root, recent, scanning, snapshot: data, generation, manualRefresh };
   };
   sharing = new SharingService({ state: libraryState, indexed, service, beforeImages, staticDir: path.join(__dirname, '..', 'dist', 'remote'), tokenFile: path.join(app.getPath('userData'), 'pairing-key.txt'), port: process.env.LUMEN_TEST_DATA ? Number(process.env.LUMEN_TEST_SHARE_PORT || 47831) : 47831 });
   if (sharingEnabled) await sharing.start().catch(error => console.error('Could not start network sharing:', error.message));
@@ -116,8 +117,8 @@ app.whenReady().then(async () => {
   ipcMain.handle('library:state', libraryState);
   // Serialize open/refresh requests so rapid folder switches cannot interleave workers.
   let opening = Promise.resolve();
-  const enqueueOpen = (folder, cache) => {
-    const result = opening.then(() => openRoot(folder, cache));
+  const enqueueOpen = (folder, cache, manual) => {
+    const result = opening.then(() => openRoot(folder, cache, manual));
     opening = result.catch(() => {}); return result;
   };
   const chooseFolder = async folder => {
@@ -128,7 +129,7 @@ app.whenReady().then(async () => {
     return enqueueOpen(folder, true);
   };
   ipcMain.handle('library:open', (_event, folder) => chooseFolder(folder));
-  const rescan = () => root ? enqueueOpen(root, true) : null;
+  const rescan = () => root ? enqueueOpen(root, true, true) : null;
   ipcMain.handle('library:rescan', rescan);
   const cancel = async () => {
     if (worker && scanning) {

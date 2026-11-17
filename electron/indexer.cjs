@@ -5,67 +5,91 @@ const crypto = require('node:crypto');
 const { parentPort, workerData } = require('node:worker_threads');
 
 const EXTENSIONS = new Set(['.jpg', '.jpeg', '.jpe', '.png', '.webp', '.gif', '.avif', '.tif', '.tiff', '.svg', '.bmp', '.heic', '.heif']);
-const fingerprint = (p, size, mtime) => crypto.createHash('sha256').update(`${p}\0${size}\0${mtime}`).digest('hex').slice(0, 32);
+const fingerprint = (p, size, mtime) => crypto.hash('sha256', `${p}\0${size}\0${mtime}`).slice(0, 32);
 const portable = p => p.split(path.sep).join('/');
 const isImage = name => EXTENSIONS.has(path.extname(name).toLowerCase());
 const parentFolder = folder => folder.slice(0, Math.max(0, folder.lastIndexOf('/')));
+const DIRECTORY_CONCURRENCY = 4;
+const STAT_BATCH_SIZE = 16;
 
-function imageItem(root, filePath, stat) {
-  const relativePath = portable(path.relative(root, filePath));
+function imageItem(filePath, stat, folder, name, extension) {
   return {
-    id: fingerprint(filePath, stat.size, stat.mtimeMs), name: path.basename(filePath), path: filePath,
-    relativePath, folder: parentFolder(relativePath), size: stat.size, modified: stat.mtimeMs,
-    extension: path.extname(filePath).slice(1).toLowerCase(),
+    id: fingerprint(filePath, stat.size, stat.mtimeMs), name, path: filePath,
+    relativePath: folder ? `${folder}/${name}` : name, folder, size: stat.size, modified: stat.mtimeMs, extension,
   };
 }
 
 // Enumeration and stat calls never run on Electron's UI thread. No image decoding
 // is needed to build the index; dimensions are read only when inspecting an image.
-async function scan(root, emit = () => {}, branch = '') {
+async function scan(root, emit, branch = '') {
   const items = [], folders = [], warnings = [];
   const queue = [branch];
-  let batch = [], lastEmit = Date.now();
+  let cursor = 0, active = 0, completed = 0;
+  let batch = [], lastBatch = 0, lastProgress = Date.now();
   const flush = () => {
-    if (batch.length) emit({ type: 'batch', items: batch });
-    batch = []; lastEmit = Date.now();
+    if (!batch.length) return;
+    emit({ type: 'batch', items: batch });
+    batch = []; lastBatch = Date.now();
   };
-  for (let cursor = 0; cursor < queue.length; cursor++) {
-    const relative = queue[cursor];
+  function progress() {
+    emit({ type: 'progress', files: items.length, directories: completed });
+    lastProgress = Date.now();
+  }
+  const finished = Promise.withResolvers();
+  function schedule() {
+    while (active < DIRECTORY_CONCURRENCY && cursor < queue.length) {
+      active++;
+      void scanDirectory(queue[cursor++]).then(() => {
+        active--;
+        completed++;
+        if (emit && (completed === 1 || Date.now() - lastProgress >= 150)) progress();
+        schedule();
+      }).catch(finished.reject);
+    }
+    if (!active) finished.resolve();
+  }
+  async function scanDirectory(relative) {
+    const directory = path.join(root, relative);
     const folder = { path: portable(relative), name: relative ? path.basename(relative) : path.basename(root), ownCount: 0, count: 0 };
     folders.push(folder);
     try {
-      const dir = await fs.opendir(path.join(root, relative));
+      const entries = await fs.readdir(directory, { withFileTypes: true });
+      // Queue subfolders before waiting for this folder's metadata, and skip links and junctions.
+      for (const entry of entries) if (entry.isDirectory()) queue.push(path.join(relative, entry.name));
+      schedule();
       let pending = [];
       const collect = async () => {
-        const results = await Promise.all(pending); pending = [];
-        for (const item of results) if (item) { items.push(item); batch.push(item); folder.ownCount++; }
-        if (batch.length >= 256 || Date.now() - lastEmit > 150) flush();
-      };
-      for await (const entry of dir) {
-        // Ignore links/junctions: avoid escaping the chosen root or recursive cycles.
-        if (entry.isDirectory()) queue.push(path.join(relative, entry.name));
-        else if (entry.isFile() && isImage(entry.name)) {
-          const filePath = path.join(root, relative, entry.name);
-          pending.push(fs.stat(filePath).then(stat => imageItem(root, filePath, stat))
-            .catch(() => { if (warnings.length < 50) warnings.push(`Could not read ${filePath}`); return null; }));
-          if (pending.length >= 32) await collect();
+        for (const item of await Promise.all(pending)) if (item) {
+          items.push(item); folder.ownCount++;
+          if (emit) batch.push(item);
         }
+        pending = [];
+        if (emit && (batch.length >= 512 || Date.now() - lastBatch >= 150)) flush();
+      };
+      for (const entry of entries) {
+        if (!entry.isFile()) continue;
+        const extension = path.extname(entry.name).toLowerCase();
+        if (!EXTENSIONS.has(extension)) continue;
+        const filePath = path.join(directory, entry.name);
+        pending.push(fs.lstat(filePath).then(stat => stat.isFile()
+          ? imageItem(filePath, stat, folder.path, entry.name, extension.slice(1)) : null,
+        () => { if (warnings.length < 50) warnings.push(`Could not read ${filePath}`); return null; }));
+        if (pending.length >= STAT_BATCH_SIZE) await collect();
       }
-      await collect();
+      if (pending.length) await collect();
     } catch (error) {
-      if (warnings.length < 50) warnings.push(`${path.join(root, relative)}: ${error.code || error.message}`);
+      if (warnings.length < 50) warnings.push(`${directory}: ${error.code || error.message}`);
     }
-    if (cursor % 16 === 0) emit({ type: 'progress', files: items.length, directories: cursor + 1 });
   }
-  flush();
+  schedule();
+  await finished.promise;
+  if (emit) { flush(); progress(); }
   const byPath = new Map(folders.map(f => [f.path, f]));
+  // Parents are queued before their children, even when another branch finishes first.
   for (let i = folders.length - 1; i >= 0; i--) {
-    const f = folders[i]; f.count += f.ownCount;
-  }
-  // Parents always precede children in the breadth-first enumeration.
-  for (let i = folders.length - 1; i > 0; i--) {
     const f = folders[i];
-    const parent = byPath.get(parentFolder(f.path));
+    f.count += f.ownCount;
+    const parent = i > 0 ? byPath.get(parentFolder(f.path)) : null;
     if (parent) parent.count += f.count;
   }
   return { root, items, folders, warnings, scannedAt: Date.now(), version: 1 };
@@ -153,33 +177,44 @@ function watchLibrary(root, emit) {
       }
       return false;
     };
+    const inspect = async relative => {
+      const file = path.join(root, relative);
+      const parent = path.dirname(file);
+      try {
+        if (!resolvedParents.has(parent)) resolvedParents.set(parent, fs.realpath(parent));
+        // Match the initial scan's policy of ignoring links and junctions.
+        const resolved = await resolvedParents.get(parent);
+        const stat = resolved === parent ? await fs.lstat(file) : null;
+        return { file, stat };
+      } catch (error) {
+        if (error.code === 'ENOENT' || error.code === 'ENOTDIR') return { file, stat: null };
+      }
+    };
+    const reconcileTarget = async (relative, event, result) => {
+      const { file, stat } = result;
+      const key = portable(relative);
+      if (stat?.isDirectory()) {
+        if (!folders.has(key) || event === 'rename') await reconcileBranch(relative, true);
+        return;
+      }
+      if (folders.has(key)) await reconcileBranch(relative, false);
+      const item = stat?.isFile() && isImage(file) ? imageItem(file, stat, parentFolder(key), path.basename(file), path.extname(file).slice(1).toLowerCase()) : null;
+      if (item && !folders.has(item.folder)) {
+        // A child event can arrive before its new directory's event.
+        let branch = item.folder;
+        while (branch && !folders.has(parentFolder(branch))) branch = parentFolder(branch);
+        await reconcileBranch(path.normalize(branch), true);
+      } else setFile(file, item);
+    };
     try {
-      for (const [relative, event] of targets) {
-        if (isCovered(relative)) continue;
-        if (!relative) { await reconcileBranch('', true); continue; }
-        const file = path.join(root, relative);
-        let stat;
-        try {
-          const parent = path.dirname(file);
-          if (!resolvedParents.has(parent)) resolvedParents.set(parent, fs.realpath(parent));
-          const resolved = await resolvedParents.get(parent);
-          // Match the initial scan's policy of ignoring links and junctions.
-          if (resolved === parent) stat = await fs.lstat(file);
-        } catch (error) {
-          if (error.code !== 'ENOENT' && error.code !== 'ENOTDIR') continue;
-        }
-        const key = portable(relative);
-        if (stat?.isDirectory()) {
-          if (!folders.has(key) || event === 'rename') await reconcileBranch(relative, true);
-        } else {
-          if (folders.has(key)) await reconcileBranch(relative, false);
-          const item = stat?.isFile() && isImage(file) ? imageItem(root, file, stat) : null;
-          if (item && !folders.has(item.folder)) {
-            // A child event can arrive before its new directory's event.
-            let branch = item.folder;
-            while (branch && !folders.has(parentFolder(branch))) branch = parentFolder(branch);
-            await reconcileBranch(path.normalize(branch), true);
-          } else setFile(file, item);
+      if (targets[0][0] === '') await reconcileBranch('', true);
+      for (let offset = 0; offset < targets.length && !covered.has(''); offset += STAT_BATCH_SIZE) {
+        const batch = targets.slice(offset, offset + STAT_BATCH_SIZE).filter(([relative]) => relative && !isCovered(relative));
+        const results = await Promise.all(batch.map(([relative]) => inspect(relative)));
+        // Apply parent events first, skipping children already handled by a branch scan.
+        for (let i = 0; i < batch.length; i++) {
+          const [relative, event] = batch[i];
+          if (results[i] && !isCovered(relative)) await reconcileTarget(relative, event, results[i]);
         }
       }
       const changedFolders = [...touched].map(key => folders.get(key)).filter(Boolean);

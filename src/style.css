@@ -33,6 +33,11 @@ main{min-width:0;min-height:0;display:flex;flex-direction:column;position:relati
   box-shadow: 0 3px 14px #0007; font-weight: 650; white-space: nowrap;
 }
 .new-images:hover:not(:disabled) { background: #c6e8ff; }
+.image-card.recently-added,
+.image-card.recently-added:hover:not(:disabled) {
+  border-color: #8bcfff;
+  box-shadow: 0 0 0 1px #8bcfff66, 0 0 12px #58afff85;
+}
 .sharing-dialog { position: fixed; z-index: 100; inset: 0; margin: auto; width: min(560px, 90vw); max-height: 85vh; overflow: auto; padding: 28px; border: 1px solid #45404f; border-radius: 16px; background: #191a20; color: #eee; box-shadow: 0 0 0 100vmax #000a; }
 .sharing-dialog p { line-height: 1.6; overflow-wrap: anywhere; }
 .sharing-dialog label { display: grid; gap: 8px; margin: 16px 0; }
