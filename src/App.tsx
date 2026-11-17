@@ -5,6 +5,7 @@ import Viewer from './Viewer';
 import Sharing from './Sharing';
 import { rootName, type ImageItem, type Folder, type Snapshot } from './types';
 import { createFolderPatternFilter, splitFolderPatterns, folderIncluded, setBranchIncluded, type FolderRules } from './folder-filter';
+import { indexCollection, summarizeFolders, selectCollection, matchesPath, searchCollection } from './collection-index';
 import ImageContextMenu from './ImageContextMenu';
 import DateRangeSlider from './DateRangeSlider';
 import { defaultBrowsing, readBrowsing, writeBrowsing } from './browsing-state';
@@ -257,55 +258,40 @@ export default function App() {
     setScrollReset(value => value + 1);
     void window.lumen.rescan().catch(error => setError(error.message));
   }, [viewer, highlight]);
-  const extensions = useMemo(() => [...new Set(items.map(i => i.extension))].sort(), [items]);
+  const collectionIndex = useMemo(() => indexCollection(items), [items]);
+  const { extensions } = collectionIndex;
   const includesFolder = useCallback((path: string) => folderIncluded(path, folderRules)
     && folderPatternIncluded(path) && !excludedDirectImages.has(path), [folderRules, folderPatternIncluded, excludedDirectImages]);
-  const { includedFolders, includedCounts, galleryFolders } = useMemo(() => {
-    const includedFolders = new Set<string>();
-    const includedCounts = new Map<string, number>();
-    const folderCounts = new Map(folders.map(folder => [folder.path, { ...folder, count: 0, ownCount: 0 }]));
-    for (const entry of folders) if (includesFolder(entry.path)) includedFolders.add(entry.path);
-    for (const item of items) {
-      const directFolder = folderCounts.get(item.folder);
-      if (directFolder) directFolder.ownCount++;
-      const included = includedFolders.has(item.folder);
-      let current = item.folder;
-      while (true) {
-        const folder = folderCounts.get(current);
-        if (folder) folder.count++;
-        if (included) includedCounts.set(current, (includedCounts.get(current) || 0) + 1);
-        if (!current) break;
-        const slash = current.lastIndexOf('/'); current = slash < 0 ? '' : current.slice(0, slash);
-      }
-    }
-    return { includedFolders, includedCounts, galleryFolders: [...folderCounts.values()] };
-  }, [items, folders, includesFolder]);
-  const hiddenInScope = useMemo(() => items.filter(item => !includedFolders.has(item.folder)
-    && (recursive ? (!folder || item.folder === folder || item.folder.startsWith(folder + '/')) : item.folder === folder)).length,
-  [items, folder, recursive, includedFolders]);
+  const { includedFolders, includedCounts, galleryFolders } = useMemo(() => summarizeFolders(collectionIndex, folders, includesFolder),
+    [collectionIndex, folders, includesFolder]);
   const searchQuery = deferredQuery.trim().toLocaleLowerCase();
   const matchesCollection = useCallback((item: ImageItem) =>
     (item.folder === folder || (recursive && (!folder || item.folder.startsWith(folder + '/'))))
     && (extension === 'all' || item.extension === extension)
-    && (!searchQuery || item.relativePath.toLocaleLowerCase().includes(searchQuery)), [folder, recursive, extension, searchQuery]);
-  const eligibleItems = useMemo(() => {
-    const result = items.filter(item => includedFolders.has(item.folder) && matchesCollection(item));
-    result.sort((a, b) => {
+    && matchesPath(item, searchQuery), [folder, recursive, extension, searchQuery]);
+  const { items: sortedScope, hiddenInScope } = useMemo(() => {
+    const scope = selectCollection(collectionIndex, folder, recursive, extension, includedFolders);
+    scope.items.sort((a, b) => {
       const value = sort === 'modified' ? a.modified - b.modified : sort === 'size' ? a.size - b.size
         : sort === 'path' ? collator.compare(a.relativePath, b.relativePath) : collator.compare(a.name, b.name);
       return (descending ? -1 : 1) * (value || collator.compare(a.relativePath, b.relativePath));
-    }); return result;
-  }, [items, matchesCollection, sort, descending, includedFolders]);
+    });
+    return scope;
+  }, [collectionIndex, folder, recursive, extension, includedFolders, sort, descending]);
+  const eligibleItems = useMemo(() => searchCollection(sortedScope, searchQuery), [sortedScope, searchQuery]);
   const dateDomain = useMemo(() => {
+    if (!dateFiltersOpen) return { minimum: null, maximum: null };
     let minimum = Infinity, maximum = -Infinity;
     for (const item of eligibleItems) { minimum = Math.min(minimum, item.modified); maximum = Math.max(maximum, item.modified); }
     return { minimum: minimum === Infinity ? null : minimum, maximum: maximum === -Infinity ? null : maximum };
-  }, [eligibleItems]);
+  }, [eligibleItems, dateFiltersOpen]);
   const after = newerThan ? new Date(newerThan).getTime() : -Infinity;
   const before = olderThan ? new Date(olderThan).getTime() : Infinity;
   const matchesDate = useCallback((item: ImageItem) => dateBoundsInclusive
     ? item.modified >= after && item.modified <= before : item.modified > after && item.modified < before, [after, before, dateBoundsInclusive]);
-  const filtered = useMemo(() => eligibleItems.filter(matchesDate), [eligibleItems, matchesDate]);
+  const hasDateBounds = !!(newerThan || olderThan);
+  const filtered = useMemo(() => hasDateBounds ? eligibleItems.filter(matchesDate) : eligibleItems,
+    [eligibleItems, hasDateBounds, matchesDate]);
   const matchingNewImages = useMemo(() => queuedImages.filter(item => includesFolder(item.folder) && matchesCollection(item) && matchesDate(item)),
     [queuedImages, includesFolder, matchesCollection, matchesDate]);
   const newImageCount = matchingNewImages.length;
@@ -325,7 +311,7 @@ export default function App() {
     setQueuedImages([...queued.current.values()]);
     setItems([...indexed.current.values()]);
   };
-  const selectedIndex = filtered.findIndex(item => item.id === selected);
+  const selectedIndex = selected ? filtered.findIndex(item => item.id === selected) : -1;
   const current = selectedIndex >= 0 ? filtered[selectedIndex] : null;
   useEffect(() => { if (viewer && !current) setViewer(false); }, [viewer, current]);
   const navigate = useCallback((direction: number) => {

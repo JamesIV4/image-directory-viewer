@@ -33,6 +33,7 @@ function compileFolderPatterns(input: string): ((folder: string) => boolean)[] {
 // exclude always wins. Compile once per input change, then reuse for the tree.
 export function createFolderPatternFilter(include: string, exclude: string): (folder: string) => boolean {
   const inclusions = compileFolderPatterns(include), exclusions = compileFolderPatterns(exclude);
+  if (!inclusions.length && !exclusions.length) return () => true;
   return folder => {
     const ancestors: string[] = [];
     let current = folder;
@@ -51,6 +52,7 @@ export function createFolderPatternFilter(include: string, exclude: string): (fo
 // parent, and changing a branch clears older rules below it.
 export type FolderRules = Map<string, boolean>;
 export function folderIncluded(folder: string, rules: FolderRules): boolean {
+  if (!rules.size) return true;
   let current = folder;
   while (true) {
     if (rules.has(current)) return rules.get(current)!;

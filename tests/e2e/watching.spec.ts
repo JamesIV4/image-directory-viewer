@@ -7,6 +7,8 @@ test('watched images wait for the prompt and only the latest batch glows', async
   const profile = await fs.mkdtemp(path.resolve('.test-data/watching-'));
   const root = path.join(profile, 'Photos');
   await fs.mkdir(path.join(root, 'Nested'), { recursive: true });
+  await fs.mkdir(path.join(root, 'Text only'));
+  await fs.writeFile(path.join(root, 'Text only', 'Notes.txt'), 'No images here yet');
   const png = await sharp({ create: { width: 24, height: 24, channels: 3, background: '#88aacc' } }).png().toBuffer();
   await Promise.all(Array.from({ length: 70 }, (_, i) => fs.writeFile(path.join(root, `Photo-${i}.png`), png)));
   const app = await electron.launch({ args: ['.', `--folder=${root}`], env: { ...process.env, LUMEN_TEST_DATA: profile, LUMEN_TEST_SHARE_PORT: '47832' } });
@@ -129,6 +131,13 @@ test('watched images wait for the prompt and only the latest batch glows', async
     await fs.unlink(path.join(root, 'Temporary.png'));
     await expect(prompt).toBeHidden();
     await indexed(desktop, 75);
+
+    await desktop.locator('.tree-label[title="Text only"]').click();
+    await desktop.getByRole('textbox', { name: 'Search images' }).fill('first.png');
+    await expect(desktop.getByRole('heading', { name: 'No matching images' })).toBeVisible();
+    await fs.writeFile(path.join(root, 'Text only', 'First.png'), png);
+    await prompt.click();
+    await expect(newCards(desktop)).toHaveAttribute('aria-label', 'View Text only/First.png');
   } finally { await browser.close(); await app.close(); }
 });
 

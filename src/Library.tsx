@@ -100,26 +100,26 @@ export default function Library({ items, view, size, selected, scroller, scrollR
   const columns = view === 'list' ? 1 : Math.max(1, Math.floor((width - 40 + 16) / ((view === 'compact' ? size * 0.68 : size) + 16)));
   const tileWidth = (width - 40 - (columns - 1) * 16) / columns;
   const height = view === 'list' ? 74 : Math.round(tileWidth * (view === 'compact' ? 0.8 : 0.74) + (view === 'compact' ? 42 : 62) + 16);
-  const rows = useMemo(() => {
+  const groupedRows = useMemo(() => {
+    if (view !== 'folders') return null;
     const rows: Row[] = [];
-    if (view === 'folders') {
-      const groups = new Map<string, ImageItem[]>();
-      for (const item of items) { if (!groups.has(item.folder)) groups.set(item.folder, []); groups.get(item.folder)!.push(item); }
-      for (const [folder, group] of [...groups].sort(([a], [b]) => a.localeCompare(b, undefined, { numeric: true }))) {
-        rows.push({ type: 'folder', folder, count: group.length });
-        for (let i = 0; i < group.length; i += columns) rows.push({ type: 'images', items: group.slice(i, i + columns) });
-      }
-    } else for (let i = 0; i < items.length; i += columns) rows.push({ type: 'images', items: items.slice(i, i + columns) });
+    const groups = new Map<string, ImageItem[]>();
+    for (const item of items) { if (!groups.has(item.folder)) groups.set(item.folder, []); groups.get(item.folder)!.push(item); }
+    for (const [folder, group] of [...groups].sort(([a], [b]) => a.localeCompare(b, undefined, { numeric: true }))) {
+      rows.push({ type: 'folder', folder, count: group.length });
+      for (let i = 0; i < group.length; i += columns) rows.push({ type: 'images', items: group.slice(i, i + columns) });
+    }
     return rows;
   }, [items, view, columns]);
-  const virtual = useVirtualizer({ count: rows.length, getScrollElement: () => scroller.current,
-    estimateSize: index => rows[index].type === 'folder' ? 58 : height, overscan: 3,
+  const virtual = useVirtualizer({ count: groupedRows?.length ?? Math.ceil(items.length / columns), getScrollElement: () => scroller.current,
+    estimateSize: index => groupedRows?.[index]?.type === 'folder' ? 58 : height, overscan: 3,
   });
-  useEffect(() => { virtual.measure(); }, [height, rows, virtual]);
+  useEffect(() => { virtual.measure(); }, [height, groupedRows, virtual]);
   useLayoutEffect(() => { scroller.current?.scrollTo({ top: 0 }); }, [scroller, view, scrollReset]);
   const scrollToSelected = useEffectEvent(() => {
     if (!selected) return;
-    const index = rows.findIndex(row => row.type === 'images' && row.items.some(i => i.id === selected));
+    const index = groupedRows ? groupedRows.findIndex(row => row.type === 'images' && row.items.some(item => item.id === selected))
+      : Math.floor(items.findIndex(item => item.id === selected) / columns);
     if (index >= 0) virtual.scrollToIndex(index, { align: 'auto' });
   });
   useEffect(() => { scrollToSelected(); }, [selected, view, columns]);
@@ -127,7 +127,8 @@ export default function Library({ items, view, size, selected, scroller, scrollR
     {view === 'list' && <div className="list-heading"><span>Image / name</span><span>Folder</span><span>File size</span><span>Modified</span></div>}
     <div style={{ height: virtual.getTotalSize(), position: 'relative' }}>
       {virtual.getVirtualItems().map(virtualRow => {
-        const row = rows[virtualRow.index];
+        const start = virtualRow.index * columns;
+        const row: Row = groupedRows?.[virtualRow.index] ?? { type: 'images', items: items.slice(start, start + columns) };
         return <div key={virtualRow.key} className="image-row" style={{ transform: `translateY(${virtualRow.start}px)`, height: virtualRow.size, gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` }}>
           {row.type === 'folder' ? <button className="group-heading" onClick={() => onFolder(row.folder)} title={`Browse ${row.folder || 'root folder'}`}>
             <FolderIcon size={17} /><strong>{row.folder || 'Root folder'}</strong><span>{row.count.toLocaleString()} images</span><ChevronRight size={16} />
