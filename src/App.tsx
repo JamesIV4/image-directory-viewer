@@ -1,5 +1,5 @@
-import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
-import { Aperture, ArrowDownWideNarrow, ArrowUpWideNarrow, Check, ChevronRight, FolderOpen, Folders, Grid2X2, Image, LayoutGrid, List, LoaderCircle, PanelLeftClose, PanelLeftOpen, RefreshCw, Search, X, Keyboard, CircleAlert, Copy, CornerDownLeft, CalendarClock, ChevronsUp, ChevronsDown, ListFilter } from 'lucide-react';
+import { useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { Aperture, ArrowDownWideNarrow, ArrowUp, ArrowUpWideNarrow, Check, ChevronRight, FolderOpen, Folders, Grid2X2, Image, LayoutGrid, List, LoaderCircle, PanelLeftClose, PanelLeftOpen, RefreshCw, Search, X, Keyboard, CircleAlert, Copy, CornerDownLeft, CalendarClock, ChevronsUp, ChevronsDown, ListFilter } from 'lucide-react';
 import Library, { FolderTree, type View } from './Library';
 import Viewer from './Viewer';
 import Sharing from './Sharing';
@@ -61,6 +61,16 @@ export default function App() {
   const [scrollReset, setScrollReset] = useState(0);
   const [toast, setToast] = useState(''), [dragging, setDragging] = useState(false), [help, setHelp] = useState(false), [showWarnings, setShowWarnings] = useState(false);
   const search = useRef<HTMLInputElement>(null), generation = useRef(0), indexed = useRef(new Map<string, ImageItem>());
+  const indexedFolders = useRef(new Map<string, Folder>());
+  const scroller = useRef<HTMLDivElement>(null);
+  const pendingItems = useRef(new Map<string, ImageItem | null>()), pendingFolders = useRef(new Map<string, Folder | null>());
+  const promptAfterDetail = useRef(false);
+  const [watchRevision, setWatchRevision] = useState(0);
+  const clearPending = useCallback(() => {
+    pendingItems.current.clear(); pendingFolders.current.clear();
+    promptAfterDetail.current = false;
+    setWatchRevision(revision => revision + 1);
+  }, []);
   const focusSearchPending = useRef(false);
   useEffect(() => {
     if (!controlsCollapsed && focusSearchPending.current) {
@@ -101,9 +111,11 @@ export default function App() {
     newerThan, olderThan, dateBoundsInclusive, dateFiltersOpen, descending, sort, view, size, controlsCollapsed]);
   const applySnapshot = useCallback((data: Snapshot) => {
     activateRoot(data.root);
+    clearPending();
     indexed.current = new Map(data.items.map(item => [item.path, item]));
+    indexedFolders.current = new Map(data.folders.map(folder => [folder.path, folder]));
     setItems(data.items); setFolders(data.folders); setWarnings(data.warnings); setRoot(data.root);
-  }, [activateRoot]);
+  }, [activateRoot, clearPending]);
   useEffect(() => {
     let alive = true, dirty = false;
     const unsubscribe = window.lumen.onIndex(event => {
@@ -111,9 +123,10 @@ export default function App() {
       generation.current = event.generation;
       if (event.type === 'start') {
         activateRoot(event.root);
+        clearPending();
         dirty = false; setRoot(event.root);
         if (!event.refresh) {
-          indexed.current = new Map(); setItems([]); setFolders([]); setContextMenu(null);
+          indexed.current.clear(); indexedFolders.current.clear(); setItems([]); setFolders([]); setContextMenu(null);
           setViewer(false); setSelected(''); returnImage.current = '';
         }
         setScanning(true); setWarnings([]); setError(''); setDirectories(0);
@@ -121,6 +134,14 @@ export default function App() {
         for (const item of event.items) indexed.current.set(item.path, item);
         dirty = true;
       } else if (event.type === 'progress') setDirectories(event.directories);
+      else if (event.type === 'update') {
+        for (const item of event.removed) pendingItems.current.set(item.path, null);
+        for (const item of event.items) pendingItems.current.set(item.path, item);
+        for (const path of event.removedFolders) pendingFolders.current.set(path, null);
+        for (const folder of event.folders) pendingFolders.current.set(folder.path, folder);
+        if (event.warnings) setWarnings(event.warnings);
+        setWatchRevision(revision => revision + 1);
+      }
       else if (event.type === 'cached' || event.type === 'complete') {
         dirty = false; applySnapshot(event.data);
         if (event.type === 'complete') setScanning(false);
@@ -155,7 +176,7 @@ export default function App() {
       }
     }).catch(error => setError(error.message));
     return () => { alive = false; clearInterval(timer); unsubscribe(); };
-  }, [applySnapshot, activateRoot, stored]);
+  }, [applySnapshot, activateRoot, clearPending, stored]);
   useEffect(() => { localStorage.setItem('lumen.view', JSON.stringify(view)); }, [view]);
   useEffect(() => { localStorage.setItem('lumen.size', JSON.stringify(size)); }, [size]);
   useEffect(() => { if (toast) { const timer = setTimeout(() => setToast(''), 2800); return () => clearTimeout(timer); } }, [toast]);
@@ -169,10 +190,12 @@ export default function App() {
     void window.lumen.rescan().catch(error => setError(error.message));
   }, [viewer]);
   const extensions = useMemo(() => [...new Set(items.map(i => i.extension))].sort(), [items]);
+  const includesFolder = useCallback((path: string) => folderIncluded(path, folderRules)
+    && folderPatternIncluded(path) && !excludedDirectImages.has(path), [folderRules, folderPatternIncluded, excludedDirectImages]);
   const { includedFolders, includedCounts } = useMemo(() => {
     const includedFolders = new Set<string>();
     const includedCounts = new Map<string, number>();
-    for (const entry of folders) if (folderIncluded(entry.path, folderRules) && folderPatternIncluded(entry.path) && !excludedDirectImages.has(entry.path)) includedFolders.add(entry.path);
+    for (const entry of folders) if (includesFolder(entry.path)) includedFolders.add(entry.path);
     for (const item of items) if (includedFolders.has(item.folder)) {
       let current = item.folder;
       while (true) {
@@ -182,31 +205,72 @@ export default function App() {
       }
     }
     return { includedFolders, includedCounts };
-  }, [items, folders, folderRules, folderPatternIncluded, excludedDirectImages]);
+  }, [items, folders, includesFolder]);
   const hiddenInScope = useMemo(() => items.filter(item => !includedFolders.has(item.folder)
     && (recursive ? (!folder || item.folder === folder || item.folder.startsWith(folder + '/')) : item.folder === folder)).length,
   [items, folder, recursive, includedFolders]);
+  const searchQuery = deferredQuery.trim().toLocaleLowerCase();
+  const matchesCollection = useCallback((item: ImageItem) =>
+    (item.folder === folder || (recursive && (!folder || item.folder.startsWith(folder + '/'))))
+    && (extension === 'all' || item.extension === extension)
+    && (!searchQuery || item.relativePath.toLocaleLowerCase().includes(searchQuery)), [folder, recursive, extension, searchQuery]);
   const eligibleItems = useMemo(() => {
-    const q = deferredQuery.trim().toLocaleLowerCase();
-    const result = items.filter(item => (recursive ? (!folder || item.folder === folder || item.folder.startsWith(folder + '/')) : item.folder === folder)
-      && includedFolders.has(item.folder)
-      && (extension === 'all' || item.extension === extension) && (!q || item.relativePath.toLocaleLowerCase().includes(q)));
+    const result = items.filter(item => includedFolders.has(item.folder) && matchesCollection(item));
     result.sort((a, b) => {
       const value = sort === 'modified' ? a.modified - b.modified : sort === 'size' ? a.size - b.size
         : sort === 'path' ? collator.compare(a.relativePath, b.relativePath) : collator.compare(a.name, b.name);
       return (descending ? -1 : 1) * (value || collator.compare(a.relativePath, b.relativePath));
     }); return result;
-  }, [items, folder, recursive, extension, deferredQuery, sort, descending, includedFolders]);
+  }, [items, matchesCollection, sort, descending, includedFolders]);
   const dateDomain = useMemo(() => {
     let minimum = Infinity, maximum = -Infinity;
     for (const item of eligibleItems) { minimum = Math.min(minimum, item.modified); maximum = Math.max(maximum, item.modified); }
     return { minimum: minimum === Infinity ? null : minimum, maximum: maximum === -Infinity ? null : maximum };
   }, [eligibleItems]);
-  const filtered = useMemo(() => {
-    const after = newerThan ? new Date(newerThan).getTime() : -Infinity;
-    const before = olderThan ? new Date(olderThan).getTime() : Infinity;
-    return eligibleItems.filter(item => dateBoundsInclusive ? item.modified >= after && item.modified <= before : item.modified > after && item.modified < before);
-  }, [eligibleItems, newerThan, olderThan, dateBoundsInclusive]);
+  const after = newerThan ? new Date(newerThan).getTime() : -Infinity;
+  const before = olderThan ? new Date(olderThan).getTime() : Infinity;
+  const matchesDate = useCallback((item: ImageItem) => dateBoundsInclusive
+    ? item.modified >= after && item.modified <= before : item.modified > after && item.modified < before, [after, before, dateBoundsInclusive]);
+  const filtered = useMemo(() => eligibleItems.filter(matchesDate), [eligibleItems, matchesDate]);
+  const newImageCount = useMemo(() => {
+    let count = 0;
+    for (const [path, item] of pendingItems.current) {
+      if (item && !indexed.current.has(path) && includesFolder(item.folder) && matchesCollection(item) && matchesDate(item)) count++;
+    }
+    return count;
+  }, [watchRevision, includesFolder, matchesCollection, matchesDate]);
+  const applyWatchedChanges = useCallback(() => {
+    if (!pendingItems.current.size && !pendingFolders.current.size) return;
+    if (pendingItems.current.size) {
+      for (const [path, item] of pendingItems.current) {
+        if (item) indexed.current.set(path, item);
+        else indexed.current.delete(path);
+      }
+      setItems([...indexed.current.values()]);
+    }
+    if (pendingFolders.current.size) {
+      for (const [path, folder] of pendingFolders.current) {
+        if (folder) indexedFolders.current.set(path, folder);
+        else indexedFolders.current.delete(path);
+      }
+      setFolders([...indexedFolders.current.values()]);
+    }
+    clearPending();
+  }, [clearPending]);
+  const applyAtTop = useCallback(() => {
+    if (!viewer && (scroller.current?.scrollTop ?? 0) <= 1) applyWatchedChanges();
+  }, [viewer, applyWatchedChanges]);
+  useLayoutEffect(() => {
+    if (!newImageCount) applyWatchedChanges();
+    // Returning from detail should announce arrivals even if the gallery is already at the top.
+    else if (viewer) promptAfterDetail.current = true;
+    else if (!promptAfterDetail.current) applyAtTop();
+  }, [watchRevision, newImageCount, filtered.length, viewer, applyAtTop, applyWatchedChanges]);
+  const showNewImages = () => {
+    scroller.current?.focus({ preventScroll: true });
+    scroller.current?.scrollTo({ top: 0, behavior: 'instant' });
+    applyWatchedChanges();
+  };
   const selectedIndex = filtered.findIndex(item => item.id === selected);
   const current = selectedIndex >= 0 ? filtered[selectedIndex] : null;
   useEffect(() => { if (viewer && !current) setViewer(false); }, [viewer, current]);
@@ -441,10 +505,15 @@ export default function App() {
         {hasFolderFilters && <div className="folder-filter-banner"><Folders size={14} /><span>Folder filters active<span className="filter-summary"> · {hiddenInScope.toLocaleString()} images hidden in this view</span></span><button onClick={resetFolderFilters}>Include all folders</button></div>}
         {error && <div className="error-banner"><CircleAlert size={16} /><span>{error}</span><button className="icon-button" aria-label="Dismiss error" onClick={() => setError('')}><X size={16} /></button></div>}
         </div>
+        <div className="collection-viewport">
+        {!viewer && newImageCount > 0 && <button className="new-images" onClick={showNewImages}>
+          <ArrowUp size={17} aria-hidden="true" />{newImageCount.toLocaleString()} New {newImageCount === 1 ? 'Image' : 'Images'}
+        </button>}
         {filtered.length ? <Library key={`${root}:${folder}:${recursive}:${extension}:${deferredQuery}:${sort}:${descending}:${[...folderRules].map(([p, included]) => `${p}=${included}`).join('|')}:${[...excludedDirectImages].join('|')}`} items={filtered} view={view} size={size} selected={selected} onSelect={setSelected}
-          scrollReset={scrollReset} onOpen={item => { setSelected(item.id); setViewer(true); }} onFolder={chooseFolder}
+          scroller={scroller} onScroll={applyAtTop} scrollReset={scrollReset} onOpen={item => { setSelected(item.id); setViewer(true); }} onFolder={chooseFolder}
           onContextMenu={(item, x, y) => { setSelected(item.id); setContextMenu({ item, x, y }); }} /> :
-          <div className="no-results">{scanning ? <><LoaderCircle size={36} className="spin" /><h2>Discovering your images…</h2><p>You can browse as soon as the first images are indexed.</p></> : <><Search size={36} /><h2>{items.length ? 'No matching images' : 'No images in this folder'}</h2><p>{items.length ? 'Try another search, date range, file type, or folder.' : 'Choose another folder, or refresh after adding images.'}</p>{(query || extension !== 'all' || !recursive || newerThan || olderThan) && <button className="button" onClick={() => { setQuery(''); setExtension('all'); setRecursive(true); setNewerThan(''); setOlderThan(''); }}>Reset filters</button>}</>}</div>}
+          <div className="no-results">{scanning ? <><LoaderCircle size={36} className="spin" /><h2>Discovering your images…</h2><p>You can browse as soon as the first images are indexed.</p></> : <><Search size={36} /><h2>{items.length ? 'No matching images' : 'No images in this folder'}</h2>{items.length > 0 && <p>Try another search, date range, file type, or folder.</p>}{(query || extension !== 'all' || !recursive || newerThan || olderThan) && <button className="button" onClick={() => { setQuery(''); setExtension('all'); setRecursive(true); setNewerThan(''); setOlderThan(''); }}>Reset filters</button>}</>}</div>}
+        </div>
       </> : <div className="welcome">
         <div className="welcome-art"><div className="art-tile tile-back"><div /></div><div className="art-tile tile-front"><div className="art-sun" /><div className="art-mountain mountain-back" /><div className="art-mountain mountain-front" /></div><span className="art-aperture"><Aperture size={30} /></span></div>
         <span className="eyebrow">YOUR IMAGES, IN ONE PLACE</span><h1>A little light on<br />your image library.</h1><p>Explore every image in a folder and its subfolders.<br />Fast previews. Clear paths. Room to see the details.</p>

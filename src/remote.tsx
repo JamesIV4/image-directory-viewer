@@ -2,13 +2,31 @@ import { useCallback, useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import App from './App';
 import RemoteFolderPicker, { type FolderListing } from './RemoteFolderPicker';
-import type { IndexEvent } from './types';
+import type { IndexEvent, Snapshot, LibraryUpdate } from './types';
 import { screenEdge, useTouchSwipe } from './touch-swipe';
 import './style.css';
 import '../pwa/style.css';
 
 type Connection = { base: string; token: string };
 type State = Awaited<ReturnType<Window['lumen']['getState']>>;
+function snapshotUpdate(previous: Snapshot, next: Snapshot): LibraryUpdate {
+  const files = new Map(previous.items.map(item => [item.path, item]));
+  const folders = new Map(previous.folders.map(folder => [folder.path, folder]));
+  const items = next.items.filter(item => {
+    const old = files.get(item.path);
+    files.delete(item.path);
+    return old?.id !== item.id;
+  });
+  const changedFolders = next.folders.filter(folder => {
+    const old = folders.get(folder.path);
+    folders.delete(folder.path);
+    return old?.count !== folder.count || old.ownCount !== folder.ownCount || old.name !== folder.name;
+  });
+  return {
+    type: 'update', items, folders: changedFolders, removedFolders: [...folders.keys()],
+    removed: [...files.values()].map(({ id, path }) => ({ id, path })), warnings: next.warnings,
+  };
+}
 function savedConnection(): Connection | null {
   try { return JSON.parse(localStorage.getItem('lumen.remote') || 'null'); } catch { return null; }
 }
@@ -74,6 +92,7 @@ function Connected({ connection, disconnect }: { connection: Connection; disconn
   const [picker, setPicker] = useState<{ initial: string; browse(path: string): Promise<FolderListing>; choose(path?: string): void } | null>(null);
   useEffect(() => {
     let alive = true, timer: ReturnType<typeof setTimeout>, last: State | null = null, stamp = '';
+    let refreshing = Promise.resolve();
     const abort = new AbortController(), listeners = new Set<(event: IndexEvent) => void>();
     let token = connection.token;
     let cancelPicker: (() => void) | undefined;
@@ -86,7 +105,12 @@ function Connected({ connection, disconnect }: { connection: Connection; disconn
       return response.json();
     }
     const emit = (event: IndexEvent) => listeners.forEach(listener => listener(event));
-    async function update() {
+    function update() {
+      const result = refreshing.then(fetchState);
+      refreshing = result.then(() => {}, () => {});
+      return result;
+    }
+    async function fetchState() {
       const next: State | null = await request(`/api/state?revision=${encodeURIComponent(stamp)}`);
       if (!next && last) { if (alive) setError(''); return last; }
       if (!next) throw new Error('Library unavailable');
@@ -94,7 +118,11 @@ function Connected({ connection, disconnect }: { connection: Connection; disconn
       const nextStamp = JSON.stringify([next.generation, next.scanning, next.snapshot?.scannedAt, next.snapshot?.items.length]);
       if (last && last.root !== next.root) emit({ type: 'start', root: next.root, refresh: false, generation: next.generation });
       else if (last && !last.scanning && next.scanning) emit({ type: 'start', root: next.root, refresh: true, generation: next.generation });
-      if (nextStamp !== stamp && next.snapshot) emit({ type: next.scanning ? 'cached' : 'complete', data: next.snapshot, generation: next.generation });
+      if (nextStamp !== stamp && next.snapshot) {
+        if (last?.snapshot && last.generation === next.generation && last.root === next.root && !last.scanning && !next.scanning) {
+          emit({ ...snapshotUpdate(last.snapshot, next.snapshot), generation: next.generation });
+        } else emit({ type: next.scanning ? 'cached' : 'complete', data: next.snapshot, generation: next.generation });
+      }
       last = next; stamp = nextStamp; setError(''); setReady(true);
       try { localStorage.setItem('lumen.remote', JSON.stringify({ base: connection.base, token })); } catch {}
       return next;

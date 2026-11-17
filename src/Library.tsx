@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useEffectEvent, useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { ChevronDown, ChevronRight, Folder as FolderIcon, ImageOff } from 'lucide-react';
 import { bytes, thumbnail, type ImageItem, type Folder } from './types';
@@ -85,18 +85,18 @@ export function FolderTree({ folders, selected, onSelect, rootLabel, rules, coun
 }
 
 type Row = { type: 'images'; items: ImageItem[] } | { type: 'folder'; folder: string; count: number };
-export default function Library({ items, view, size, selected, scrollReset, onSelect, onOpen, onFolder, onContextMenu }: {
+export default function Library({ items, view, size, selected, scroller, scrollReset, onScroll, onSelect, onOpen, onFolder, onContextMenu }: {
   items: ImageItem[]; view: View; size: number; selected: string; scrollReset: number; onSelect: (id: string) => void;
+  scroller: RefObject<HTMLDivElement | null>; onScroll: () => void;
   onOpen: (item: ImageItem) => void; onFolder: (path: string) => void;
   onContextMenu: (item: ImageItem, x: number, y: number) => void;
 }) {
-  const scroller = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(900);
   useEffect(() => {
     const observer = new ResizeObserver(entries => setWidth(entries[0].contentRect.width));
     if (scroller.current) observer.observe(scroller.current);
     return () => observer.disconnect();
-  }, []);
+  }, [scroller]);
   const columns = view === 'list' ? 1 : Math.max(1, Math.floor((width - 40 + 16) / ((view === 'compact' ? size * 0.68 : size) + 16)));
   const tileWidth = (width - 40 - (columns - 1) * 16) / columns;
   const height = view === 'list' ? 74 : Math.round(tileWidth * (view === 'compact' ? 0.8 : 0.74) + (view === 'compact' ? 42 : 62) + 16);
@@ -116,13 +116,14 @@ export default function Library({ items, view, size, selected, scrollReset, onSe
     estimateSize: index => rows[index].type === 'folder' ? 58 : height, overscan: 3,
   });
   useEffect(() => { virtual.measure(); }, [height, rows, virtual]);
-  useEffect(() => { scroller.current?.scrollTo({ top: 0 }); }, [view, scrollReset]);
-  useEffect(() => {
+  useLayoutEffect(() => { scroller.current?.scrollTo({ top: 0 }); }, [scroller, view, scrollReset]);
+  const scrollToSelected = useEffectEvent(() => {
     if (!selected) return;
     const index = rows.findIndex(row => row.type === 'images' && row.items.some(i => i.id === selected));
     if (index >= 0) virtual.scrollToIndex(index, { align: 'auto' });
-  }, [selected, rows, virtual]);
-  return <div className={`library ${view}`} ref={scroller} role="region" aria-label="Image collection">
+  });
+  useEffect(() => { scrollToSelected(); }, [selected, view, columns]);
+  return <div className={`library ${view}`} ref={scroller} onScroll={onScroll} tabIndex={-1} role="region" aria-label="Image collection">
     {view === 'list' && <div className="list-heading"><span>Image / name</span><span>Folder</span><span>File size</span><span>Modified</span></div>}
     <div style={{ height: virtual.getTotalSize(), position: 'relative' }}>
       {virtual.getVirtualItems().map(virtualRow => {

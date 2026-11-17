@@ -25,6 +25,14 @@ main{min-width:0;min-height:0;display:flex;flex-direction:column;position:relati
 @media(prefers-reduced-motion:reduce){*{transition:none!important;scroll-behavior:auto!important}}
 
 .library::-webkit-scrollbar-thumb { min-height: 120px; }
+.collection-viewport { position: relative; display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.new-images {
+  position: absolute; z-index: 3; top: 10px; left: 50%; transform: translateX(-50%);
+  display: flex; align-items: center; gap: 7px; min-height: 38px; padding: 0 14px;
+  border: 1px solid #c6e8ff; border-radius: 999px; background: #a9d9ff; color: #112a3d;
+  box-shadow: 0 3px 14px #0007; font-weight: 650; white-space: nowrap;
+}
+.new-images:hover:not(:disabled) { background: #c6e8ff; }
 .sharing-dialog { position: fixed; z-index: 100; inset: 0; margin: auto; width: min(560px, 90vw); max-height: 85vh; overflow: auto; padding: 28px; border: 1px solid #45404f; border-radius: 16px; background: #191a20; color: #eee; box-shadow: 0 0 0 100vmax #000a; }
 .sharing-dialog p { line-height: 1.6; overflow-wrap: anywhere; }
 .sharing-dialog label { display: grid; gap: 8px; margin: 16px 0; }

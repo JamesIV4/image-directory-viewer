@@ -4,11 +4,15 @@ export interface ImageItem {
 }
 export interface Folder { path: string; name: string; ownCount: number; count: number }
 export interface Snapshot { root: string; items: ImageItem[]; folders: Folder[]; warnings: string[]; scannedAt: number }
+export interface LibraryUpdate {
+  type: 'update'; items: ImageItem[]; removed: Pick<ImageItem, 'id' | 'path'>[];
+  folders: Folder[]; removedFolders: string[]; warnings?: string[];
+}
 export interface Metadata { width?: number; height?: number; format: string; pages: number; space?: string; hasAlpha: boolean }
 export type IndexEvent = { generation: number } & (
   { type: 'start'; root: string; refresh: boolean } | { type: 'batch'; items: ImageItem[] } |
   { type: 'progress'; files: number; directories: number } |
-  { type: 'cached' | 'complete'; data: Snapshot } | { type: 'error'; message: string }
+  { type: 'cached' | 'complete'; data: Snapshot } | { type: 'error'; message: string } | LibraryUpdate
 );
 declare global {
   interface Window {

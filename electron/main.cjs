@@ -12,6 +12,7 @@ if (process.platform === 'win32') app.setAppUserModelId('com.jamesiv4.image-dire
 if (process.env.LUMEN_TEST_DATA) app.setPath('userData', process.env.LUMEN_TEST_DATA);
 protocol.registerSchemesAsPrivileged([{ scheme: 'lumen', privileges: { standard: true, secure: true, supportFetchAPI: true } }]);
 let window, worker, cacheWorker, service, root = '', items = new Map(), snapshot = null, scanning = false, generation = 0;
+let watchedFolders;
 let recent = [], lastRoot = '';
 let sharingEnabled = true;
 let decoding = false, cacheMaintenance;
@@ -33,6 +34,7 @@ async function openRoot(folder, useCache = true) {
   if (worker) await worker.terminate();
   const refresh = root === folder;
   generation++; root = folder; scanning = true;
+  watchedFolders = null;
   if (!refresh) { items = new Map(); snapshot = null; }
   send({ type: 'start', root, refresh });
   lastRoot = root;
@@ -46,6 +48,15 @@ async function openRoot(folder, useCache = true) {
     if (current !== generation) return;
     if (event.type === 'cached' || event.type === 'complete') {
       snapshot = event.data; items = new Map(event.data.items.map(item => [item.id, item]));
+    } else if (event.type === 'update') {
+      watchedFolders ??= new Map(snapshot.folders.map(folder => [folder.path, folder]));
+      for (const item of event.removed) items.delete(item.id);
+      for (const item of event.items) items.set(item.id, item);
+      for (const folder of event.removedFolders) watchedFolders.delete(folder);
+      for (const folder of event.folders) watchedFolders.set(folder.path, folder);
+      // Materialize a full snapshot only for clients that request one.
+      snapshot = { ...snapshot, items: null, folders: null, warnings: event.warnings ?? snapshot.warnings,
+        scannedAt: Math.max(Date.now(), snapshot.scannedAt + 1) };
     } else if (event.type === 'batch') for (const item of event.items) items.set(item.id, item);
     if (event.type === 'complete' || event.type === 'error') scanning = false;
     send(event);
@@ -65,6 +76,9 @@ app.whenReady().then(async () => {
   const cacheDir = path.join(app.getPath('userData'), 'thumbnails');
   service = new ImageService(cacheDir);
   const libraryState = () => {
+    if (snapshot && watchedFolders && !snapshot.items) {
+      snapshot = { ...snapshot, items: [...items.values()], folders: [...watchedFolders.values()] };
+    }
     let data = snapshot;
     if (root && (scanning || !data)) {
       const folders = new Map([['', { path: '', name: path.basename(root), count: 0, ownCount: 0 }]]);
