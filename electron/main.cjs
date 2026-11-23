@@ -10,7 +10,7 @@ let sharing;
 
 if (process.platform === 'win32') app.setAppUserModelId('com.jamesiv4.image-directory-viewer');
 if (process.env.LUMEN_TEST_DATA) app.setPath('userData', process.env.LUMEN_TEST_DATA);
-protocol.registerSchemesAsPrivileged([{ scheme: 'lumen', privileges: { standard: true, secure: true, supportFetchAPI: true } }]);
+protocol.registerSchemesAsPrivileged([{ scheme: 'lumen', privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true } }]);
 let window, worker, cacheWorker, service, root = '', items = new Map(), snapshot = null, scanning = false, generation = 0;
 let watchedFolders;
 let manualRefresh = false;
@@ -104,15 +104,22 @@ app.whenReady().then(async () => {
     return status;
   });
   protocol.handle('lumen', async request => {
+    const url = new URL(request.url), id = url.pathname.slice(1);
+    const isThumbnail = url.hostname === 'thumb';
     try {
-      const url = new URL(request.url), id = url.pathname.slice(1);
       const item = indexed(id);
       await beforeImages();
-      const file = url.hostname === 'thumb' ? await service.thumbnail(item, request.signal)
+      const file = isThumbnail ? await service.thumbnail(item, request.signal)
         : url.hostname === 'image' ? await service.full(item) : null;
       if (!file) return new Response('Unknown resource', { status: 404 });
-      return net.fetch(pathToFileURL(file).toString());
-    } catch { return new Response('Image unavailable or unsupported', { status: 404 }); }
+      const response = await net.fetch(pathToFileURL(file).toString());
+      if (!isThumbnail) return response;
+      const headers = new Headers(response.headers);
+      headers.set('Access-Control-Allow-Origin', '*');
+      return new Response(response.body, { status: response.status, headers });
+    } catch {
+      return new Response('Image unavailable or unsupported', { status: 404, headers: isThumbnail ? { 'Access-Control-Allow-Origin': '*' } : {} });
+    }
   });
   ipcMain.handle('library:state', libraryState);
   // Serialize open/refresh requests so rapid folder switches cannot interleave workers.

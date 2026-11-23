@@ -1,12 +1,14 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useEffectEvent, useLayoutEffect, useRef, useState } from 'react';
 import { TransformWrapper, TransformComponent, type ReactZoomPanPinchRef } from 'react-zoom-pan-pinch';
-import { ArrowLeft, ChevronLeft, ChevronRight, Copy, FolderOpen, Maximize, Minimize, Minus, Plus, Scan, ImageOff, Info, X, Grid2X2 } from 'lucide-react';
+import { ArrowLeft, ChevronLeft, ChevronRight, Copy, FolderOpen, Maximize, Minimize, Minus, Plus, Scan, ImageOff, Info, X, Grid2X2, Download, Play, Pause } from 'lucide-react';
 import { original, bytes, type ImageItem, type Metadata } from './types';
-import { Download } from 'lucide-react';
 import SaveImage from './SaveImage';
 import { screenEdge, useTouchSwipe } from './touch-swipe';
 
 type Dimensions = { width: number; height: number };
+type Direction = -1 | 1;
+const defaultFps = 12, minFps = 0.1, maxFps = 60;
+const validFps = (value: number) => value >= minFps && value <= maxFps;
 
 function ImageLayer({ item, visible, interactive, nearestNeighbor, onReady, onFailure, onScale, onDoubleClick }: {
   item: ImageItem; visible: boolean; interactive: boolean; nearestNeighbor: boolean;
@@ -64,8 +66,41 @@ export default function Viewer({ item, index, count, onClose, onPrevious, onNext
   const [scale, setScale] = useState(1);
   const [info, setInfo] = useState(false), [fullscreen, setFullscreen] = useState(false);
   const [saveId, setSaveId] = useState<string | null>(null);
+  const [playback, setPlayback] = useState<Direction | null>(null);
+  const [fps, setFps] = useState(() => {
+    const saved = Number(localStorage.getItem('lumen.playbackFps'));
+    return validFps(saved) ? saved : defaultFps;
+  });
   const [nearestNeighbor, setNearestNeighbor] = useState(() => localStorage.getItem('lumen.nearestNeighbor') === 'true');
   useEffect(() => { localStorage.setItem('lumen.nearestNeighbor', String(nearestNeighbor)); }, [nearestNeighbor]);
+  useEffect(() => { localStorage.setItem('lumen.playbackFps', String(fps)); }, [fps]);
+  const atStart = index <= 0, atEnd = index >= count - 1;
+  const playbackEnded = (playback === -1 && atStart) || (playback === 1 && atEnd);
+  useEffect(() => { if (playbackEnded) setPlayback(null); }, [playbackEnded]);
+  const playbackTick = useEffectEvent((direction: Direction) => {
+    // Keep the current image on screen while the next original decodes.
+    if ((!ready && !failed) || playbackEnded) return;
+    if (direction === 1) onNext();
+    else onPrevious();
+  });
+  useEffect(() => {
+    if (!playback || playbackEnded) return;
+    const timer = window.setInterval(() => playbackTick(playback), 1000 / fps);
+    return () => window.clearInterval(timer);
+  }, [playback, playbackEnded, fps]);
+  const step = useCallback((direction: Direction) => {
+    setPlayback(null);
+    if (direction === 1) onNext();
+    else onPrevious();
+  }, [onNext, onPrevious]);
+  const togglePlayback = (direction: Direction) => {
+    setSaveId(null);
+    setPlayback(current => current === direction ? null : direction);
+  };
+  const openSave = () => {
+    setPlayback(null);
+    setSaveId(item.id);
+  };
   const imageReady = useCallback((item: ImageItem, dimensions: Dimensions, controls: ReactZoomPanPinchRef) => {
     if (item.id !== currentId.current) return;
     transform.current = controls;
@@ -94,8 +129,8 @@ export default function Viewer({ item, index, count, onClose, onPrevious, onNext
     const currentScale = transform.current?.state.scale ?? scale;
     if (currentScale > Math.min(fitted, 1) * 1.01 && Math.abs(currentScale - fitted) > fitted * 0.01) return null;
     return direction => {
-      if (direction === 'left') onNext();
-      else if (direction === 'right') onPrevious();
+      if (direction === 'left') step(1);
+      else if (direction === 'right') step(-1);
       else onClose();
     };
   });
@@ -110,10 +145,11 @@ export default function Viewer({ item, index, count, onClose, onPrevious, onNext
   }, [ready, fit, actual]);
   useEffect(() => {
     setMetadata(null);
+    if (!info) return;
     let alive = true;
     window.lumen.metadata(item.id).then(data => { if (alive) setMetadata(data); }).catch(() => {});
     return () => { alive = false; };
-  }, [item.id]);
+  }, [item.id, info]);
   useEffect(() => {
     const observer = new ResizeObserver(() => { if (ready && Math.abs((transform.current?.state.scale || 1) - fitScale()) < 0.1) fit(0); });
     if (stage.current) observer.observe(stage.current);
@@ -121,9 +157,10 @@ export default function Viewer({ item, index, count, onClose, onPrevious, onNext
   }, [ready, fit, fitScale]);
   useEffect(() => {
     const keydown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') { event.preventDefault(); onClose(); }
-      else if (event.key === 'ArrowLeft') { event.preventDefault(); onPrevious(); }
-      else if (event.key === 'ArrowRight') { event.preventDefault(); onNext(); }
+      if (event.key === 'Escape') { event.preventDefault(); onClose(); return; }
+      if (event.target instanceof HTMLInputElement) return;
+      if (event.key === 'ArrowLeft') { event.preventDefault(); step(-1); }
+      else if (event.key === 'ArrowRight') { event.preventDefault(); step(1); }
       else if (ready && (event.key === '+' || event.key === '=')) transform.current?.zoomIn();
       else if (ready && event.key === '-') transform.current?.zoomOut();
       else if (event.key === '0' || event.key.toLowerCase() === 'f') fit();
@@ -132,7 +169,7 @@ export default function Viewer({ item, index, count, onClose, onPrevious, onNext
       else if (event.key.toLowerCase() === 'n') setNearestNeighbor(value => !value);
     };
     document.addEventListener('keydown', keydown); return () => document.removeEventListener('keydown', keydown);
-  }, [onClose, onNext, onPrevious, fit, actual, ready]);
+  }, [onClose, step, fit, actual, ready]);
   useEffect(() => {
     const previous = document.activeElement as HTMLElement;
     document.getElementById('viewer-close')?.focus();
@@ -149,7 +186,7 @@ export default function Viewer({ item, index, count, onClose, onPrevious, onNext
       <button id="viewer-close" className="icon-button" title="Back to collection (Esc)" aria-label="Close viewer" onClick={onClose}><ArrowLeft size={20} /></button>
       <div className="viewer-title"><strong>{item.name}</strong><span title={item.path}>{item.path}</span></div>
       <span className="viewer-counter">{index + 1} / {count.toLocaleString()}</span>
-      {window.lumen.remote && <button className="icon-button" title="Save image" aria-label="Save image" aria-expanded={saveId === item.id} onClick={() => setSaveId(saveId === item.id ? null : item.id)}><Download size={19} /></button>}
+      {window.lumen.remote && <button className="icon-button" title="Save image" aria-label="Save image" aria-expanded={saveId === item.id} onClick={() => saveId === item.id ? setSaveId(null) : openSave()}><Download size={19} /></button>}
       <button className={`icon-button ${info ? 'active' : ''}`} title="Image details (I)" aria-label="Image details" onClick={() => setInfo(!info)}><Info size={19} /></button>
       <button className="icon-button" title="Fullscreen" aria-label="Toggle fullscreen" onClick={() => invoke(window.lumen.fullscreen().then(setFullscreen))}>{fullscreen ? <Minimize size={19} /> : <Maximize size={19} />}</button>
       <button className="icon-button" title="Close viewer" aria-label="Back to collection" onClick={onClose}><X size={19} /></button>
@@ -162,8 +199,8 @@ export default function Viewer({ item, index, count, onClose, onPrevious, onNext
           interactive={ready && layer.id === item.id} nearestNeighbor={nearestNeighbor}
           onReady={imageReady} onFailure={imageFailure} onScale={imageScale} onDoubleClick={toggleZoom} />)}
         {failed && <div className="viewer-error"><ImageOff size={40} /><h2>Unable to display this image</h2><p>The file may be damaged, removed, or use an unsupported codec.</p><button className="button" onClick={() => invoke(window.lumen.reveal(item.id))}><FolderOpen size={16} />Show in Explorer</button></div>}
-        <button className="viewer-nav previous" aria-label="Previous image" title="Previous (←)" disabled={index === 0} onClick={onPrevious}><ChevronLeft size={26} /></button>
-        <button className="viewer-nav next" aria-label="Next image" title="Next (→)" disabled={index === count - 1} onClick={onNext}><ChevronRight size={26} /></button>
+        <button className="viewer-nav previous" aria-label="Previous image" title="Previous (←)" disabled={atStart} onClick={() => step(-1)}><ChevronLeft size={26} /></button>
+        <button className="viewer-nav next" aria-label="Next image" title="Next (→)" disabled={atEnd} onClick={() => step(1)}><ChevronRight size={26} /></button>
       </div>
       {info && <aside className="image-info"><span className="eyebrow">IMAGE DETAILS</span><h3>{item.name}</h3>
         <dl><dt>Dimensions</dt><dd>{dimensions ? `${dimensions.width.toLocaleString()} × ${dimensions.height.toLocaleString()}` : 'Reading…'}</dd>
@@ -172,18 +209,36 @@ export default function Viewer({ item, index, count, onClose, onPrevious, onNext
           {metadata && <><dt>Color space</dt><dd>{metadata.space || 'Unknown'}</dd><dt>Frames / pages</dt><dd>{metadata.pages}</dd></>}
           <dt>Full path</dt><dd className="full-path">{item.path}</dd></dl>
         <button className="button" onClick={() => invoke(window.lumen.copyPath(item.id), 'Image path copied')}><Copy size={15} />Copy path</button>
-        {window.lumen.remote && <button className="button" onClick={() => setSaveId(item.id)}><Download size={15} />Save image</button>}
+        {window.lumen.remote && <button className="button" onClick={openSave}><Download size={15} />Save image</button>}
         <button className="button" onClick={() => invoke(window.lumen.reveal(item.id))}><FolderOpen size={15} />Show in Explorer</button>
       </aside>}
     </div>
-    <footer className="viewer-footer"><span className="viewer-summary">{dimensions ? `${dimensions.width.toLocaleString()} × ${dimensions.height.toLocaleString()}` : 'Original image'}<i />{bytes(item.size)}</span>
+    <footer className="viewer-footer"><div className="viewer-footer-meta">
+      <span className="viewer-summary">{dimensions ? `${dimensions.width.toLocaleString()} × ${dimensions.height.toLocaleString()}` : 'Original image'}<i />{bytes(item.size)}</span>
+      <span className="viewer-hint">{window.lumen.remote ? 'Pinch to zoom · Swipe at fit to browse or close' : 'Scroll to zoom · Drag to pan'}</span>
+    </div>
       <div className="zoom-toolbar"><button className="icon-button" title="Zoom out (-)" aria-label="Zoom out" disabled={!ready} onClick={() => transform.current?.zoomOut()}><Minus size={18} /></button>
         <span className="zoom-value">{Math.round(scale * 100)}%</span>
         <button className="icon-button" title="Zoom in (+)" aria-label="Zoom in" disabled={!ready} onClick={() => transform.current?.zoomIn()}><Plus size={18} /></button>
         <i /><button className="text-button" title="Fit to window (F / 0)" disabled={!ready} onClick={() => fit()}><Scan size={16} />Fit</button>
         <button className="text-button" title="Actual size (1)" disabled={!ready} onClick={actual}>1:1</button>
         <i /><button className={`text-button nearest-toggle ${nearestNeighbor ? 'active' : ''}`} title="Nearest neighbor above 100% zoom (N)" aria-label="Nearest neighbor" aria-pressed={nearestNeighbor} onClick={() => setNearestNeighbor(value => !value)}><Grid2X2 size={15} /><span>Nearest</span></button>
-      </div><span className="viewer-hint">{window.lumen.remote ? 'Pinch to zoom · Swipe at fit to browse or close' : 'Scroll to zoom · Drag to pan'}</span>
+      </div>
+      <div className="playback-toolbar" role="group" aria-label="Image playback">
+        <button className={`icon-button ${playback === -1 ? 'active' : ''}`} disabled={atStart} aria-label={playback === -1 ? 'Pause playback' : 'Play backward'}
+          title={playback === -1 ? 'Pause playback' : 'Play backward'} onClick={() => togglePlayback(-1)}>
+          {playback === -1 ? <Pause size={17} /> : <Play className="reverse-play" size={17} />}
+        </button>
+        <button className={`icon-button ${playback === 1 ? 'active' : ''}`} disabled={atEnd} aria-label={playback === 1 ? 'Pause playback' : 'Play forward'}
+          title={playback === 1 ? 'Pause playback' : 'Play forward'} onClick={() => togglePlayback(1)}>
+          {playback === 1 ? <Pause size={17} /> : <Play size={17} />}
+        </button>
+        <label className="playback-rate" title={`Playback frame rate (${minFps}–${maxFps} FPS)`}>
+          <input aria-label="Playback frame rate" type="number" min={minFps} max={maxFps} step="any" defaultValue={fps}
+            onChange={event => { if (validFps(event.target.valueAsNumber)) setFps(event.target.valueAsNumber); }}
+            onBlur={event => { event.target.value = String(fps); }} /> FPS
+        </label>
+      </div>
     </footer>
   </div>;
 }

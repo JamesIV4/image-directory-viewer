@@ -32,6 +32,7 @@ test('fresh HTTPS PWA discovers the advertised hostname without an address or ke
     await mobile.goto(site);
     await expect(mobile.locator('.image-card')).toHaveCount(1, { timeout: 15000 });
     await expect(mobile.locator('.image-card')).toContainText('Found.png');
+    await expect(mobile.locator('.thumb img')).toHaveJSProperty('naturalWidth', 20);
     expect(await mobile.evaluate(() => JSON.parse(localStorage.getItem('lumen.remote')!).base)).toBe('http://lumen.local:47831');
     await mobile.locator('.image-card').click();
     await mobile.getByRole('button', { name: 'Save image', exact: true }).click();

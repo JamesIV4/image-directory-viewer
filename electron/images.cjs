@@ -25,32 +25,46 @@ class ImageService {
     this.cacheDir = cacheDir; this.parallel = parallel;
     this.running = 0; this.queue = []; this.inflight = new Map();
   }
-  schedule(key, work) {
-    if (this.inflight.has(key)) return this.inflight.get(key);
-    const result = new Promise((resolve, reject) => { this.queue.push({ work, resolve, reject }); this.drain(); });
-    this.inflight.set(key, result);
-    result.finally(() => this.inflight.delete(key)).catch(() => {});
-    return result;
+  schedule(key, work, signal) {
+    signal?.throwIfAborted();
+    let task = this.inflight.get(key);
+    if (task) {
+      task.signals.add(signal);
+      return task.result;
+    }
+    task = { key, work, signals: new Set([signal]) };
+    task.result = new Promise((resolve, reject) => Object.assign(task, { resolve, reject }));
+    this.inflight.set(key, task);
+    this.queue.push(task);
+    this.drain();
+    return task.result;
   }
   drain() {
     while (this.running < this.parallel && this.queue.length) {
-      const task = this.queue.shift(); this.running++;
-      Promise.resolve().then(task.work).then(task.resolve, task.reject).finally(() => { this.running--; this.drain(); });
+      const task = this.queue.shift();
+      if ([...task.signals].every(signal => signal?.aborted)) {
+        this.inflight.delete(task.key);
+        task.reject(new Error('Request canceled'));
+        continue;
+      }
+      this.running++;
+      Promise.resolve().then(task.work).then(task.resolve, task.reject).finally(() => {
+        this.inflight.delete(task.key); this.running--; this.drain();
+      });
     }
   }
   async thumbnail(item, signal) {
     return this.cached(item, 'thumb', 'webp', async destination => {
-      if (signal?.aborted) throw new Error('Request canceled');
       if (item.extension === 'bmp') { await bmpWork({ path: item.path, destination, mode: 'thumbnail' }); return; }
       await sharp(item.path, inputOptions).autoOrient().resize(640, 640, { fit: 'inside', withoutEnlargement: true }).webp({ quality: 78 }).toFile(destination);
-    });
+    }, signal);
   }
   async full(item) {
     // Chromium displays these directly, retaining GIF/WebP animation and original detail.
     if (!['tif', 'tiff', 'svg', 'heic', 'heif'].includes(item.extension)) return item.path;
     return this.cached(item, 'full', 'png', destination => sharp(item.path, inputOptions).autoOrient().png().toFile(destination));
   }
-  cached(item, kind, extension, generate) {
+  cached(item, kind, extension, generate, signal) {
     const key = `${item.id}-${kind}`;
     return this.schedule(key, async () => {
       const dir = path.join(this.cacheDir, item.id.slice(0, 2));
@@ -61,7 +75,7 @@ class ImageService {
       try { await generate(temporary); await fs.rename(temporary, destination); }
       catch (error) { await fs.unlink(temporary).catch(() => {}); throw error; }
       return destination;
-    });
+    }, signal);
   }
   metadata(item) {
     return this.schedule(`${item.id}-metadata`, async () => {

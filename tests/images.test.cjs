@@ -90,6 +90,23 @@ test('failed decoding does not poison the queue or leave temporary files', async
   assert.equal(service.running, 0);
 });
 
+test('canceled thumbnail requests skip queued work unless the thumbnail still has a reader', async () => {
+  const service = new ImageService('', 1);
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  const busy = service.schedule('busy', () => gate);
+  const abort = new AbortController();
+  const abandoned = service.schedule('abandoned', () => assert.fail('Canceled work ran'), abort.signal);
+  const shared = service.schedule('shared', () => 'thumbnail', abort.signal);
+  const secondReader = service.schedule('shared', () => assert.fail('Shared work ran again'));
+  abort.abort();
+  release();
+  await assert.rejects(abandoned, /Request canceled/);
+  await busy;
+  assert.equal(await shared, 'thumbnail');
+  assert.equal(await secondReader, 'thumbnail');
+});
+
 test('BMP package runs off-thread with accurate colors and metadata', async t => {
   const bmp = require('bmp-js');
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'lumen-bmp-'));

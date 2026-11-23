@@ -30,6 +30,7 @@ class SharingService {
     }
     if (this.tokenFile) await fs.writeFile(this.tokenFile, this.token, { mode: 0o600 });
     const server = http.createServer((req, res) => this.handle(req, res).catch(() => {
+      if (res.destroyed) return;
       if (!res.headersSent) res.writeHead(404, { 'Cache-Control': 'no-store' });
       res.end('Resource unavailable');
     }));
@@ -157,7 +158,11 @@ class SharingService {
       if (state.generation !== this.state().generation) { res.writeHead(409); return res.end(); }
       res.setHeader('Content-Type', 'application/json'); return res.end(JSON.stringify(metadata));
     }
-    const file = match[1] === 'thumb' ? await this.service.thumbnail(safeItem) : await this.service.full(safeItem);
+    const abort = new AbortController();
+    if (res.destroyed) return;
+    res.once('close', () => abort.abort());
+    const file = match[1] === 'thumb' ? await this.service.thumbnail(safeItem, abort.signal) : await this.service.full(safeItem);
+    if (res.destroyed) return;
     if (state.generation !== this.state().generation) { res.writeHead(409); return res.end('Library changed'); }
     res.setHeader('Content-Type', mime[path.extname(file).toLowerCase()] || 'application/octet-stream');
     await pipeline(createReadStream(file), res);

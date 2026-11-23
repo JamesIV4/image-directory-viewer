@@ -1,14 +1,19 @@
-import { useEffect, useEffectEvent, useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react';
+import { useCallback, useEffect, useEffectEvent, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type RefObject } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { ChevronDown, ChevronRight, Folder as FolderIcon, ImageOff } from 'lucide-react';
-import { bytes, thumbnail, type ImageItem, type Folder } from './types';
+import { bytes, type ImageItem, type Folder } from './types';
 import { folderIncluded, type FolderRules } from './folder-filter';
+import { ThumbnailWindow } from './thumbnail-window';
 
 export type View = 'grid' | 'compact' | 'list' | 'folders';
-export function Thumb({ item }: { item: ImageItem }) {
-  const [failed, setFailed] = useState(false);
-  return failed ? <div className="failed-thumb"><ImageOff size={25} /><span>Preview unavailable</span></div> :
-    <img src={thumbnail(item)} alt={item.name} loading="lazy" decoding="async" draggable={false} onError={() => setFailed(true)} />;
+function Thumb({ item, previews }: { item: ImageItem; previews: ThumbnailWindow }) {
+  const subscribe = useCallback((listener: () => void) => previews.subscribe(item.id, listener), [item.id, previews]);
+  const read = useCallback(() => previews.get(item.id), [item.id, previews]);
+  const url = useSyncExternalStore(subscribe, read);
+  const [failedUrl, setFailedUrl] = useState<string>();
+  if (url === undefined) return null;
+  if (!url || url === failedUrl) return <div className="failed-thumb"><ImageOff size={25} /><span>Preview unavailable</span></div>;
+  return <img src={url} alt={item.name} decoding="async" draggable={false} onError={() => setFailedUrl(url)} />;
 }
 
 function FolderCheck({ folder, rules, counts, patternIncluded, onChange }: {
@@ -84,14 +89,17 @@ export function FolderTree({ folders, selected, onSelect, rootLabel, rules, coun
   </>;
 }
 
-type Row = { type: 'images'; items: ImageItem[] } | { type: 'folder'; folder: string; count: number };
-export default function Library({ items, view, size, selected, scroller, scrollReset, lastAddedPaths, onSelect, onOpen, onFolder, onContextMenu }: {
-  items: ImageItem[]; view: View; size: number; selected: string; scrollReset: number; onSelect: (id: string) => void;
+type Row = { type: 'images'; start: number; end: number } | { type: 'folder'; start: number; folder: string; count: number };
+export default function Library({ items, view, size, selected, viewerOpen, scroller, scrollReset, lastAddedPaths, onSelect, onOpen, onFolder, onContextMenu }: {
+  items: ImageItem[]; view: View; size: number; selected: string; viewerOpen: boolean; scrollReset: number; onSelect: (id: string) => void;
   scroller: RefObject<HTMLDivElement | null>; lastAddedPaths: ReadonlySet<string>;
   onOpen: (item: ImageItem) => void; onFolder: (path: string) => void;
   onContextMenu: (item: ImageItem, x: number, y: number) => void;
 }) {
   const [width, setWidth] = useState(900);
+  const [previews] = useState(() => new ThumbnailWindow());
+  const listHeading = useRef<HTMLDivElement>(null);
+  useEffect(() => () => previews.clear(), [previews]);
   useEffect(() => {
     const observer = new ResizeObserver(entries => setWidth(entries[0].contentRect.width));
     if (scroller.current) observer.observe(scroller.current);
@@ -100,43 +108,67 @@ export default function Library({ items, view, size, selected, scroller, scrollR
   const columns = view === 'list' ? 1 : Math.max(1, Math.floor((width - 40 + 16) / ((view === 'compact' ? size * 0.68 : size) + 16)));
   const tileWidth = (width - 40 - (columns - 1) * 16) / columns;
   const height = view === 'list' ? 74 : Math.round(tileWidth * (view === 'compact' ? 0.8 : 0.74) + (view === 'compact' ? 42 : 62) + 16);
-  const groupedRows = useMemo(() => {
+  const grouped = useMemo(() => {
     if (view !== 'folders') return null;
     const rows: Row[] = [];
+    const ordered: ImageItem[] = [];
     const groups = new Map<string, ImageItem[]>();
     for (const item of items) { if (!groups.has(item.folder)) groups.set(item.folder, []); groups.get(item.folder)!.push(item); }
     for (const [folder, group] of [...groups].sort(([a], [b]) => a.localeCompare(b, undefined, { numeric: true }))) {
-      rows.push({ type: 'folder', folder, count: group.length });
-      for (let i = 0; i < group.length; i += columns) rows.push({ type: 'images', items: group.slice(i, i + columns) });
+      const start = ordered.length;
+      rows.push({ type: 'folder', start, folder, count: group.length });
+      for (let i = 0; i < group.length; i += columns) rows.push({ type: 'images', start: start + i, end: start + Math.min(i + columns, group.length) });
+      for (const item of group) ordered.push(item);
     }
-    return rows;
+    return { rows, ordered };
   }, [items, view, columns]);
+  const ordered = grouped?.ordered ?? items;
+  const groupedRows = grouped?.rows;
   const virtual = useVirtualizer({ count: groupedRows?.length ?? Math.ceil(items.length / columns), getScrollElement: () => scroller.current,
     estimateSize: index => groupedRows?.[index]?.type === 'folder' ? 58 : height, overscan: 3,
   });
   useEffect(() => { virtual.measure(); }, [height, groupedRows, virtual]);
   useLayoutEffect(() => { scroller.current?.scrollTo({ top: 0 }); }, [scroller, view, scrollReset]);
   const scrollToSelected = useEffectEvent(() => {
-    if (!selected) return;
-    const index = groupedRows ? groupedRows.findIndex(row => row.type === 'images' && row.items.some(item => item.id === selected))
-      : Math.floor(items.findIndex(item => item.id === selected) / columns);
+    if (!selected || viewerOpen) return;
+    const imageIndex = ordered.findIndex(item => item.id === selected);
+    const index = groupedRows ? groupedRows.findIndex(row => row.type === 'images' && row.start <= imageIndex && imageIndex < row.end)
+      : Math.floor(imageIndex / columns);
     if (index >= 0) virtual.scrollToIndex(index, { align: 'auto' });
   });
-  useEffect(() => { scrollToSelected(); }, [selected, view, columns]);
+  useEffect(() => { scrollToSelected(); }, [selected, view, columns, viewerOpen]);
+
+  const virtualRows = virtual.getVirtualItems();
+  // The sticky heading covers as much of the viewport as it offsets the rows.
+  // Only the bottom boundary needs to account for its height and margin.
+  const top = virtual.scrollOffset ?? 0;
+  const heading = listHeading.current;
+  const headingSpace = heading ? heading.offsetHeight + parseFloat(getComputedStyle(heading).marginBottom) : 0;
+  const bottom = top + (virtual.scrollRect?.height ?? 0) - headingSpace;
+  const visibleRows = virtualRows.filter(row => row.start < bottom && row.end - (groupedRows?.[row.index]?.type === 'folder' ? 0 : view === 'list' ? 6 : 16) > top);
+  const first = visibleRows[0]?.index ?? virtual.range?.startIndex;
+  const last = visibleRows.at(-1)?.index ?? first;
+  const start = first === undefined ? 0 : groupedRows?.[first]?.start ?? first * columns;
+  const end = last === undefined ? start : groupedRows ? groupedRows[last + 1]?.start ?? ordered.length : Math.min(ordered.length, (last + 1) * columns);
+  useEffect(() => {
+    if (viewerOpen || first === undefined) previews.pause();
+    else previews.show(ordered, start, end);
+  }, [viewerOpen, first, previews, ordered, start, end]);
+
   return <div className={`library ${view}`} ref={scroller} tabIndex={-1} role="region" aria-label="Image collection">
-    {view === 'list' && <div className="list-heading"><span>Image / name</span><span>Folder</span><span>File size</span><span>Modified</span></div>}
+    {view === 'list' && <div ref={listHeading} className="list-heading"><span>Image / name</span><span>Folder</span><span>File size</span><span>Modified</span></div>}
     <div style={{ height: virtual.getTotalSize(), position: 'relative' }}>
-      {virtual.getVirtualItems().map(virtualRow => {
+      {virtualRows.map(virtualRow => {
         const start = virtualRow.index * columns;
-        const row: Row = groupedRows?.[virtualRow.index] ?? { type: 'images', items: items.slice(start, start + columns) };
+        const row: Row = groupedRows?.[virtualRow.index] ?? { type: 'images', start, end: start + columns };
         return <div key={virtualRow.key} className="image-row" style={{ transform: `translateY(${virtualRow.start}px)`, height: virtualRow.size, gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` }}>
           {row.type === 'folder' ? <button className="group-heading" onClick={() => onFolder(row.folder)} title={`Browse ${row.folder || 'root folder'}`}>
             <FolderIcon size={17} /><strong>{row.folder || 'Root folder'}</strong><span>{row.count.toLocaleString()} images</span><ChevronRight size={16} />
-          </button> : row.items.map(item => <button key={item.id} data-image-id={item.id} className={`image-card ${selected === item.id ? 'selected' : ''} ${lastAddedPaths.has(item.path) ? 'recently-added' : ''}`}
+          </button> : ordered.slice(row.start, row.end).map(item => <button key={item.id} data-image-id={item.id} className={`image-card ${selected === item.id ? 'selected' : ''} ${lastAddedPaths.has(item.path) ? 'recently-added' : ''}`}
             aria-label={`View ${item.relativePath}`} title={item.relativePath} onFocus={() => onSelect(item.id)} onClick={() => { onSelect(item.id); onOpen(item); }}
             onContextMenu={event => { event.preventDefault(); const rect = event.currentTarget.getBoundingClientRect(); onContextMenu(item, event.clientX || rect.left + 20, event.clientY || rect.top + 20); }}
             onKeyDown={event => { if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) { event.preventDefault(); const rect = event.currentTarget.getBoundingClientRect(); onContextMenu(item, rect.left + 20, rect.top + 20); } }}>
-            <div className="thumb"><Thumb item={item} /><span className="format-badge">{item.extension.toUpperCase()}</span></div>
+            <div className="thumb"><Thumb item={item} previews={previews} /><span className="format-badge">{item.extension.toUpperCase()}</span></div>
             <div className="card-caption"><strong>{item.name}</strong><span>{view === 'list' ? item.extension.toUpperCase() : item.folder || 'Root folder'}</span></div>
             {view === 'list' && <><span className="list-folder">{item.folder || 'Root folder'}</span><span className="list-size">{bytes(item.size)}</span><span className="list-date">{new Date(item.modified).toLocaleDateString()}</span></>}
           </button>)}

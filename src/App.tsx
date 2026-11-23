@@ -550,7 +550,7 @@ export default function App() {
           <ArrowUp size={17} aria-hidden="true" />{newImageCount.toLocaleString()} New {newImageCount === 1 ? 'Image' : 'Images'}
         </button>}
         {filtered.length ? <Library key={`${root}:${folder}:${recursive}:${extension}:${deferredQuery}:${sort}:${descending}:${[...folderRules].map(([p, included]) => `${p}=${included}`).join('|')}:${[...excludedDirectImages].join('|')}`} items={filtered} view={view} size={size} selected={selected} onSelect={setSelected}
-          scroller={scroller} lastAddedPaths={lastAddedPaths} scrollReset={scrollReset} onOpen={item => { setSelected(item.id); setViewer(true); }} onFolder={chooseFolder}
+          viewerOpen={viewer} scroller={scroller} lastAddedPaths={lastAddedPaths} scrollReset={scrollReset} onOpen={item => { setSelected(item.id); setViewer(true); }} onFolder={chooseFolder}
           onContextMenu={(item, x, y) => { setSelected(item.id); setContextMenu({ item, x, y }); }} /> :
           <div className="no-results">{scanning ? <><LoaderCircle size={36} className="spin" /><h2>Discovering your images…</h2><p>You can browse as soon as the first images are indexed.</p></> : <><Search size={36} /><h2>{items.length ? 'No matching images' : 'No images in this folder'}</h2>{items.length > 0 && <p>Try another search, date range, file type, or folder.</p>}{(query || extension !== 'all' || !recursive || newerThan || olderThan) && <button className="button" onClick={() => { setQuery(''); setExtension('all'); setRecursive(true); setNewerThan(''); setOlderThan(''); }}>Reset filters</button>}</>}</div>}
         </div>

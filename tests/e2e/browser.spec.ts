@@ -70,6 +70,67 @@ test('virtual gallery, folder filtering, breadcrumbs, all views, and search', as
   await page.getByRole('combobox', { name: 'Filter file type' }).selectOption('all');
 });
 
+test('a cold scroll jump starts at the viewport and prefetches only the surrounding window', async () => {
+  await page.getByRole('button', { name: 'Details view', exact: true }).click();
+  await page.getByRole('combobox', { name: 'Sort images' }).selectOption('name');
+  const ascending = page.getByRole('button', { name: 'Sort ascending', exact: true });
+  if (await ascending.isVisible()) await ascending.click();
+  await page.locator('.tree-label').filter({ hasText: 'Landscapes' }).click();
+  await expect(page.locator('h1')).toContainText('Landscapes36');
+  const image = await sharp({ create: { width: 1, height: 1, channels: 3, background: '#564279' } }).webp().toBuffer();
+  await page.evaluate(async base64 => {
+    const fetchImage = window.fetch;
+    const snapshot = (await window.lumen.getState()).snapshot!;
+    const names = new Map(snapshot.items.map(item => [item.id, item.name]));
+    const blob = new Blob([Uint8Array.from(atob(base64), value => value.charCodeAt(0))], { type: 'image/webp' });
+    const requests: { index: number; signal: AbortSignal }[] = [];
+    const respond: (() => void)[] = [];
+    let hold = true;
+    window.fetch = (input, options) => {
+      const match = /^lumen:\/\/thumb\/(.+)$/.exec(String(input));
+      if (!match) return fetchImage(input, options);
+      const texture = /^Texture (\d+)\.png$/.exec(names.get(match[1]) || '');
+      const signal = options!.signal!;
+      if (texture) requests.push({ index: Number(texture[1]), signal });
+      if (!hold) return Promise.resolve(new Response(blob));
+      return new Promise((resolve, reject) => {
+        respond.push(() => resolve(new Response(blob)));
+        signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+      });
+    };
+    Object.assign(window, { scrollProbe: {
+      requests,
+      release() { hold = false; respond.forEach(resolve => resolve()); },
+      restore() { window.fetch = fetchImage; },
+    } });
+  }, image.toString('base64'));
+  const requests = () => page.evaluate<{ index: number; aborted: boolean }[]>(() => {
+    return (window as any).scrollProbe.requests.map(({ index, signal }: { index: number; signal: AbortSignal }) => ({ index, aborted: signal.aborted }));
+  });
+  try {
+    await page.locator('.tree-label').filter({ hasText: 'Textures' }).click();
+    await expect.poll(async () => (await requests()).length).toBeGreaterThanOrEqual(3);
+    const initialCount = (await requests()).length;
+    await page.locator('.library').evaluate(element => { element.scrollTop = 800 * 74; });
+    await expect.poll(async () => (await requests())[initialCount]?.index).toBe(800);
+    expect((await requests()).slice(0, initialCount).every(request => request.aborted)).toBe(true);
+    await page.evaluate(() => (window as any).scrollProbe.release());
+    await expect.poll(async () => (await requests()).at(-1)?.index).toBe(300);
+    const indices = (await requests()).slice(initialCount).map(({ index }) => index);
+    expect(Math.min(...indices)).toBe(300);
+    expect(Math.max(...indices)).toBeLessThan(1310);
+    const above = indices.indexOf(799);
+    expect(above).toBeGreaterThanOrEqual(151);
+    expect(above).toBeLessThan(160);
+    expect(indices.slice(above, above + 100)).toEqual(Array.from({ length: 100 }, (_, i) => 799 - i));
+    await expect(page.getByRole('button', { name: 'View Textures/Texture 0800.png', exact: true }).locator('img')).toHaveJSProperty('naturalWidth', 1);
+  } finally {
+    await page.evaluate(() => { (window as any).scrollProbe.restore(); delete (window as any).scrollProbe; });
+    await page.locator('.all-images').click();
+    await page.getByRole('button', { name: 'Gallery view', exact: true }).click();
+  }
+});
+
 test('quick folder exclusions, nested include exceptions, navigation, and refresh', async () => {
   await page.locator('.tree-label').filter({ hasText: 'Landscapes' }).click();
   await page.getByRole('checkbox', { name: 'Include Landscapes/Mountains', exact: true }).uncheck();
@@ -353,6 +414,46 @@ test('image navigation retains the original through decoding and skips stale loa
   expect(samples.translucent).toBe(0);
   expect(samples.toolbarShift).toBeLessThan(0.5);
   await page.keyboard.press('Escape');
+});
+
+test('viewer adjusts playback rate, pauses and plays both directions to the collection edges', async () => {
+  await page.evaluate(() => localStorage.removeItem('lumen.playbackFps'));
+  await page.locator('.all-images').click();
+  await page.getByRole('textbox', { name: 'Search images' }).fill('Amethyst');
+  await expect(page.locator('.image-card')).toHaveCount(4);
+  await page.locator('.image-card').first().click();
+  await expect(page.locator('.original-image:visible')).toHaveCount(1);
+  const rate = page.getByRole('spinbutton', { name: 'Playback frame rate' });
+  const counter = page.locator('.viewer-counter');
+  const forward = page.getByRole('button', { name: 'Play forward', exact: true });
+  const backward = page.getByRole('button', { name: 'Play backward', exact: true });
+  const pause = page.getByRole('button', { name: 'Pause playback', exact: true });
+  await expect(rate).toHaveValue('12');
+  await expect(backward).toBeDisabled();
+  await rate.fill('0.1');
+  await forward.click();
+  await expect(pause).toBeEnabled();
+  await page.waitForTimeout(200);
+  await expect(counter).toHaveText('1 / 4');
+  await rate.fill('12.5');
+  await expect(counter).toHaveText('4 / 4');
+  await expect(pause).toHaveCount(0);
+  await expect(forward).toBeDisabled();
+  await rate.fill('0.1');
+  await backward.click();
+  await pause.click();
+  await expect(backward).toBeEnabled();
+  await expect(counter).toHaveText('4 / 4');
+  await rate.fill('12.5');
+  await backward.click();
+  await expect(counter).toHaveText('1 / 4');
+  await expect(pause).toHaveCount(0);
+  await expect(backward).toBeDisabled();
+  await page.getByRole('button', { name: 'Close viewer', exact: true }).click();
+  await page.locator('.image-card').first().click();
+  await expect(rate).toHaveValue('12.5');
+  await page.getByRole('button', { name: 'Close viewer', exact: true }).click();
+  await page.getByRole('button', { name: 'Clear search' }).click();
 });
 
 test('corrupt files, refresh reconciliation, narrow layout, and recent folders', async () => {
