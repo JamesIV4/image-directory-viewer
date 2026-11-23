@@ -59,10 +59,10 @@ class ImageService {
       await sharp(item.path, inputOptions).autoOrient().resize(640, 640, { fit: 'inside', withoutEnlargement: true }).webp({ quality: 78 }).toFile(destination);
     }, signal);
   }
-  async full(item) {
+  async full(item, signal) {
     // Chromium displays these directly, retaining GIF/WebP animation and original detail.
     if (!['tif', 'tiff', 'svg', 'heic', 'heif'].includes(item.extension)) return item.path;
-    return this.cached(item, 'full', 'png', destination => sharp(item.path, inputOptions).autoOrient().png().toFile(destination));
+    return this.cached(item, 'full', 'png', destination => sharp(item.path, inputOptions).autoOrient().png().toFile(destination), signal);
   }
   cached(item, kind, extension, generate, signal) {
     const key = `${item.id}-${kind}`;

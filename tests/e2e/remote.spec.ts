@@ -130,6 +130,21 @@ test('automatically connect, browse originals, reconnect, cache shell and revoke
     await mobile.getByRole('button', { name: 'Image details', exact: true }).click();
     await expect(mobile.locator('.image-info')).toContainText('600');
     await expect(mobile.locator('.image-info')).toContainText('srgb');
+    await mobile.evaluate(() => {
+      const post = Worker.prototype.postMessage;
+      Worker.prototype.postMessage = function (url: string) {
+        if (url.includes('/api/image/')) {
+          Worker.prototype.postMessage = post;
+          this.addEventListener('message', event => {
+            Object.assign(window, { remotePlaybackWidth: event.data.bitmap?.width ?? 0 });
+          }, { once: true });
+        }
+        post.call(this, url, []);
+      };
+    });
+    await mobile.getByRole('button', { name: 'Play forward', exact: true }).click();
+    await expect.poll(() => mobile.evaluate(() => (window as any).remotePlaybackWidth)).toBe(600);
+    await expect(mobile.locator('.viewer-counter')).toHaveText('2 / 2');
     await mobile.getByRole('button', { name: 'Close viewer', exact: true }).click();
     await mobile.getByRole('button', { name: 'Details view', exact: true }).click();
     await expect(mobile.locator('.library')).toHaveClass(/list/);

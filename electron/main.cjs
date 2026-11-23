@@ -105,20 +105,20 @@ app.whenReady().then(async () => {
   });
   protocol.handle('lumen', async request => {
     const url = new URL(request.url), id = url.pathname.slice(1);
-    const isThumbnail = url.hostname === 'thumb';
+    const cors = { 'Access-Control-Allow-Origin': dev ? 'http://127.0.0.1:5173' : 'null' };
     try {
       const item = indexed(id);
       await beforeImages();
-      const file = isThumbnail ? await service.thumbnail(item, request.signal)
-        : url.hostname === 'image' ? await service.full(item) : null;
+      const file = url.hostname === 'thumb' ? await service.thumbnail(item, request.signal)
+        : url.hostname === 'image' ? await service.full(item, request.signal) : null;
       if (!file) return new Response('Unknown resource', { status: 404 });
-      const response = await net.fetch(pathToFileURL(file).toString());
-      if (!isThumbnail) return response;
+      const response = await net.fetch(pathToFileURL(file).toString(), { signal: request.signal });
+      if (url.hostname !== 'image') return response;
       const headers = new Headers(response.headers);
-      headers.set('Access-Control-Allow-Origin', '*');
+      headers.set('Access-Control-Allow-Origin', cors['Access-Control-Allow-Origin']);
       return new Response(response.body, { status: response.status, headers });
     } catch {
-      return new Response('Image unavailable or unsupported', { status: 404, headers: isThumbnail ? { 'Access-Control-Allow-Origin': '*' } : {} });
+      return new Response('Image unavailable or unsupported', { status: 404, headers: cors });
     }
   });
   ipcMain.handle('library:state', libraryState);

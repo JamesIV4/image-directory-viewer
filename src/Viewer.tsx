@@ -1,33 +1,52 @@
-import { useCallback, useEffect, useEffectEvent, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useEffectEvent, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { TransformWrapper, TransformComponent, type ReactZoomPanPinchRef } from 'react-zoom-pan-pinch';
 import { ArrowLeft, ChevronLeft, ChevronRight, Copy, FolderOpen, Maximize, Minimize, Minus, Plus, Scan, ImageOff, Info, X, Grid2X2, Download, Play, Pause } from 'lucide-react';
 import { original, bytes, type ImageItem, type Metadata } from './types';
 import SaveImage from './SaveImage';
 import { screenEdge, useTouchSwipe } from './touch-swipe';
+import { PlaybackBuffer, type PlaybackDirection } from './playback-buffer';
 
 type Dimensions = { width: number; height: number };
-type Direction = -1 | 1;
+type Layer = { key: string; item: ImageItem; bitmap?: ImageBitmap };
 const defaultFps = 12, minFps = 0.1, maxFps = 60;
 const validFps = (value: number) => value >= minFps && value <= maxFps;
 
-function ImageLayer({ item, visible, interactive, nearestNeighbor, onReady, onFailure, onScale, onDoubleClick }: {
-  item: ImageItem; visible: boolean; interactive: boolean; nearestNeighbor: boolean;
-  onReady: (item: ImageItem, dimensions: Dimensions, transform: ReactZoomPanPinchRef) => void;
+function ImageLayer({ source, visible, interactive, nearestNeighbor, onReady, onFailure, onScale, onDoubleClick }: {
+  source: Layer; visible: boolean; interactive: boolean; nearestNeighbor: boolean;
+  onReady: (source: Layer, dimensions: Dimensions, transform: ReactZoomPanPinchRef) => void;
   onFailure: (id: string) => void; onScale: (id: string, scale: number) => void;
   onDoubleClick: () => void;
 }) {
+  const { item, bitmap, key } = source;
   const layer = useRef<HTMLDivElement>(null), transform = useRef<ReactZoomPanPinchRef>(null);
+  const canvas = useRef<HTMLCanvasElement>(null);
   const [dimensions, setDimensions] = useState<Dimensions | null>(null), [scale, setScale] = useState(1);
   const viewportScale = dimensions && layer.current
     ? Math.min((layer.current.clientWidth - 80) / dimensions.width, (layer.current.clientHeight - 80) / dimensions.height) : 1;
   const fitScale = Math.min(viewportScale, 1);
   const nearestRendering = CSS.supports('image-rendering', 'crisp-edges') ? 'crisp-edges' : 'pixelated';
+  const imageRendering = nearestNeighbor && scale > 1 ? nearestRendering : 'auto';
+  useLayoutEffect(() => {
+    if (!bitmap?.width || !canvas.current) return;
+    const { width, height } = bitmap;
+    canvas.current.width = width;
+    canvas.current.height = height;
+    const output = canvas.current.getContext('bitmaprenderer');
+    if (output) output.transferFromImageBitmap(bitmap);
+    else {
+      const context = canvas.current.getContext('2d');
+      context?.drawImage(bitmap, 0, 0);
+      bitmap.close();
+      if (!context) { onFailure(key); return; }
+    }
+    setDimensions({ width, height });
+  }, [bitmap, key, onFailure]);
   useLayoutEffect(() => {
     if (!dimensions || !layer.current || !transform.current) return;
     const scale = Math.min((layer.current.clientWidth - 80) / dimensions.width, (layer.current.clientHeight - 80) / dimensions.height, 1);
     transform.current.setTransform((layer.current.clientWidth - dimensions.width * scale) / 2, (layer.current.clientHeight - dimensions.height * scale) / 2, scale, 0);
-    onReady(item, dimensions, transform.current);
-  }, [dimensions, item, onReady]);
+    onReady(source, dimensions, transform.current);
+  }, [dimensions, source, onReady]);
   return <div className="viewer-image-layer" ref={layer} aria-hidden={!visible} onDoubleClick={onDoubleClick}
     style={{ visibility: visible ? 'visible' : 'hidden', pointerEvents: interactive ? 'auto' : 'none' }}>
     <TransformWrapper ref={transform} initialScale={1} minScale={Math.min(0.01, fitScale / 2)} maxScale={Math.max(16, viewportScale)}
@@ -35,38 +54,48 @@ function ImageLayer({ item, visible, interactive, nearestNeighbor, onReady, onFa
       // Smooth wheel mode multiplies step by deltaY (usually 100–120 px per tick).
       // Scale the step with current zoom so a tick stays modest even on tiny/huge images.
       wheel={{ step: scale * 0.001 }} doubleClick={{ disabled: true }} keyboard={{ disabled: true }}
-      onTransform={(_ref, state) => { setScale(state.scale); onScale(item.id, state.scale); }}>
+      onTransform={(_ref, state) => { setScale(state.scale); onScale(key, state.scale); }}>
       <TransformComponent wrapperClass="zoom-wrapper" contentClass="zoom-content">
-        <img className="original-image" src={original(item)} alt={item.name} draggable={false}
-          style={{ imageRendering: nearestNeighbor && scale > 1 ? nearestRendering : 'auto' }}
+        {bitmap ? <canvas ref={canvas} className="original-image" role="img" aria-label={item.name} style={{ imageRendering }} /> :
+        <img className="original-image" src={original(item)} alt={item.name} draggable={false} style={{ imageRendering }}
           onLoad={async event => {
             const image = event.currentTarget;
             try {
               await image.decode();
               if (image.isConnected) setDimensions({ width: image.naturalWidth, height: image.naturalHeight });
-            } catch { if (image.isConnected) onFailure(item.id); }
-          }} onError={() => onFailure(item.id)} />
+            } catch { if (image.isConnected) onFailure(key); }
+          }} onError={() => onFailure(key)} />}
       </TransformComponent>
     </TransformWrapper>
   </div>;
 }
 
-export default function Viewer({ item, index, count, onClose, onPrevious, onNext, onMessage }: {
-  item: ImageItem; index: number; count: number; onClose: () => void; onPrevious: () => void; onNext: () => void; onMessage: (message: string) => void;
+export default function Viewer({ items, index, onClose, onPrevious, onNext, onMessage }: {
+  items: ImageItem[]; index: number; onClose: () => void; onPrevious: () => void; onNext: () => void; onMessage: (message: string) => void;
 }) {
+  const item = items[index], count = items.length;
   const transform = useRef<ReactZoomPanPinchRef>(null);
   const stage = useRef<HTMLDivElement>(null);
   const currentId = useRef(item.id);
   currentId.current = item.id;
-  const [displayed, setDisplayed] = useState<{ item: ImageItem; dimensions: Dimensions } | null>(null);
-  const [failedId, setFailedId] = useState<string | null>(null);
-  const failed = failedId === item.id, ready = !failed && displayed?.item.id === item.id;
+  const [submittedFrame, setSubmittedFrame] = useState<{ id: string; bitmap: ImageBitmap } | null>(null);
+  const inTransfer = useRef<ImageBitmap | null>(null);
+  const bitmap = submittedFrame?.id === item.id ? submittedFrame.bitmap : undefined;
+  const activeLayer = useMemo(() => ({ item, bitmap, key: bitmap ? `${item.id}:playback` : item.id }), [item, bitmap]);
+  const currentLayer = useRef(activeLayer.key);
+  currentLayer.current = activeLayer.key;
+  const [displayed, setDisplayed] = useState<{ source: Layer; dimensions: Dimensions } | null>(null);
+  const [failedKey, setFailedKey] = useState<string | null>(null);
+  const failed = failedKey === activeLayer.key, ready = !failed && displayed?.source.key === activeLayer.key;
   const dimensions = ready ? displayed.dimensions : null;
   const [metadata, setMetadata] = useState<Metadata | null>(null);
   const [scale, setScale] = useState(1);
   const [info, setInfo] = useState(false), [fullscreen, setFullscreen] = useState(false);
   const [saveId, setSaveId] = useState<string | null>(null);
-  const [playback, setPlayback] = useState<Direction | null>(null);
+  const [playback, setPlayback] = useState<PlaybackDirection | null>(null);
+  const [buffer] = useState(() => new PlaybackBuffer((window.lumen.remote ? 96 : 144) * 1024 * 1024, window.lumen.remote ? 3 : 4));
+  const [buffering, setBuffering] = useState(false);
+  const warmingUp = useRef(true);
   const [fps, setFps] = useState(() => {
     const saved = Number(localStorage.getItem('lumen.playbackFps'));
     return validFps(saved) ? saved : defaultFps;
@@ -76,10 +105,36 @@ export default function Viewer({ item, index, count, onClose, onPrevious, onNext
   useEffect(() => { localStorage.setItem('lumen.playbackFps', String(fps)); }, [fps]);
   const atStart = index <= 0, atEnd = index >= count - 1;
   const playbackEnded = (playback === -1 && atStart) || (playback === 1 && atEnd);
-  useEffect(() => { if (playbackEnded) setPlayback(null); }, [playbackEnded]);
-  const playbackTick = useEffectEvent((direction: Direction) => {
-    // Keep the current image on screen while the next original decodes.
+  const stopPlayback = useCallback(() => {
+    setPlayback(null);
+    setBuffering(false);
+    inTransfer.current?.close();
+    inTransfer.current = null;
+    setSubmittedFrame(null);
+  }, []);
+  useEffect(() => { if (playbackEnded) stopPlayback(); }, [playbackEnded, stopPlayback]);
+  const currentBytes = dimensions ? dimensions.width * dimensions.height * 4 : 0;
+  useLayoutEffect(() => {
+    if (playback && !playbackEnded) buffer.prepare(items, index, playback, fps, currentBytes);
+    else buffer.clear();
+  }, [buffer, items, index, playback, playbackEnded, fps, currentBytes]);
+  useLayoutEffect(() => () => { buffer.clear(); inTransfer.current?.close(); }, [buffer]);
+  const playbackTick = useEffectEvent((direction: PlaybackDirection) => {
     if ((!ready && !failed) || playbackEnded) return;
+    const next = items[index + direction];
+    if (!next) return;
+    const minimum = warmingUp.current ? Math.min(8, Math.ceil(fps * 0.4)) : 1;
+    if (!buffer.ready(next.id, minimum)) {
+      warmingUp.current = true;
+      setBuffering(true);
+      return;
+    }
+    const bitmap = buffer.take(next.id);
+    inTransfer.current?.close();
+    inTransfer.current = bitmap ?? null;
+    setSubmittedFrame(bitmap ? { id: next.id, bitmap } : null);
+    warmingUp.current = false;
+    setBuffering(false);
     if (direction === 1) onNext();
     else onPrevious();
   });
@@ -88,30 +143,35 @@ export default function Viewer({ item, index, count, onClose, onPrevious, onNext
     const timer = window.setInterval(() => playbackTick(playback), 1000 / fps);
     return () => window.clearInterval(timer);
   }, [playback, playbackEnded, fps]);
-  const step = useCallback((direction: Direction) => {
-    setPlayback(null);
+  const step = useCallback((direction: PlaybackDirection) => {
+    stopPlayback();
     if (direction === 1) onNext();
     else onPrevious();
-  }, [onNext, onPrevious]);
-  const togglePlayback = (direction: Direction) => {
+  }, [onNext, onPrevious, stopPlayback]);
+  const togglePlayback = (direction: PlaybackDirection) => {
     setSaveId(null);
-    setPlayback(current => current === direction ? null : direction);
+    if (playback === direction) stopPlayback();
+    else {
+      warmingUp.current = true;
+      setBuffering(false);
+      setPlayback(direction);
+    }
   };
   const openSave = () => {
-    setPlayback(null);
+    stopPlayback();
     setSaveId(item.id);
   };
-  const imageReady = useCallback((item: ImageItem, dimensions: Dimensions, controls: ReactZoomPanPinchRef) => {
-    if (item.id !== currentId.current) return;
+  const imageReady = useCallback((source: Layer, dimensions: Dimensions, controls: ReactZoomPanPinchRef) => {
+    if (source.key !== currentLayer.current) return;
     transform.current = controls;
-    setFailedId(null);
+    setFailedKey(null);
     setScale(controls.state.scale);
-    setDisplayed({ item, dimensions });
+    setDisplayed({ source, dimensions });
   }, []);
-  const imageFailure = useCallback((id: string) => { if (id === currentId.current) setFailedId(id); }, []);
-  const imageScale = useCallback((id: string, scale: number) => { if (id === currentId.current) setScale(scale); }, []);
+  const imageFailure = useCallback((key: string) => { if (key === currentLayer.current) setFailedKey(key); }, []);
+  const imageScale = useCallback((key: string, scale: number) => { if (key === currentLayer.current) setScale(scale); }, []);
   // Keep the fitted image mounted until its decoded replacement is ready to paint.
-  const layers = displayed && displayed.item.id !== item.id ? [displayed.item, item] : [item];
+  const layers = displayed && displayed.source.key !== activeLayer.key ? [displayed.source, activeLayer] : [activeLayer];
   const fitScale = useCallback(() => {
     if (!stage.current || !dimensions) return 1;
     return Math.min((stage.current.clientWidth - 80) / dimensions.width, (stage.current.clientHeight - 80) / dimensions.height);
@@ -195,9 +255,10 @@ export default function Viewer({ item, index, count, onClose, onPrevious, onNext
     <div className="viewer-body">
       <div className="viewer-stage" ref={stage}>
         {!displayed && !failed && <div className="viewer-loading"><span className="spinner" />Loading original…</div>}
-        {layers.map(layer => <ImageLayer key={layer.id} item={layer} visible={!failed && displayed?.item.id === layer.id}
-          interactive={ready && layer.id === item.id} nearestNeighbor={nearestNeighbor}
+        {layers.map(layer => <ImageLayer key={layer.key} source={layer} visible={!failed && displayed?.source.key === layer.key}
+          interactive={ready && layer.key === activeLayer.key} nearestNeighbor={nearestNeighbor}
           onReady={imageReady} onFailure={imageFailure} onScale={imageScale} onDoubleClick={toggleZoom} />)}
+        {buffering && <span className="playback-buffering" role="status">Buffering frames…</span>}
         {failed && <div className="viewer-error"><ImageOff size={40} /><h2>Unable to display this image</h2><p>The file may be damaged, removed, or use an unsupported codec.</p><button className="button" onClick={() => invoke(window.lumen.reveal(item.id))}><FolderOpen size={16} />Show in Explorer</button></div>}
         <button className="viewer-nav previous" aria-label="Previous image" title="Previous (←)" disabled={atStart} onClick={() => step(-1)}><ChevronLeft size={26} /></button>
         <button className="viewer-nav next" aria-label="Next image" title="Next (→)" disabled={atEnd} onClick={() => step(1)}><ChevronRight size={26} /></button>

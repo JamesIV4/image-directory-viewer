@@ -54,6 +54,11 @@ main{min-width:0;min-height:0;display:flex;flex-direction:column;position:relati
 }
 .playback-toolbar .icon-button.active { background: #3b304e; color: #d6bfff; }
 .reverse-play { transform: scaleX(-1); }
+.playback-buffering {
+  position: absolute; bottom: 14px; left: 50%; transform: translateX(-50%);
+  padding: 6px 10px; border-radius: 6px; background: #151619dd; color: #d4cfdf;
+  font-size: 11px; pointer-events: none; white-space: nowrap;
+}
 .playback-rate { display: flex; align-items: center; gap: 5px; padding: 0 4px; color: #a9a7b9; }
 .playback-rate input {
   width: 58px; height: 28px; padding: 0 5px; color: #e3dceb; background: #151619;

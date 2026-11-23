@@ -161,7 +161,7 @@ class SharingService {
     const abort = new AbortController();
     if (res.destroyed) return;
     res.once('close', () => abort.abort());
-    const file = match[1] === 'thumb' ? await this.service.thumbnail(safeItem, abort.signal) : await this.service.full(safeItem);
+    const file = match[1] === 'thumb' ? await this.service.thumbnail(safeItem, abort.signal) : await this.service.full(safeItem, abort.signal);
     if (res.destroyed) return;
     if (state.generation !== this.state().generation) { res.writeHead(409); return res.end('Library changed'); }
     res.setHeader('Content-Type', mime[path.extname(file).toLowerCase()] || 'application/octet-stream');

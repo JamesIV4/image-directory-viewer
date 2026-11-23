@@ -567,7 +567,7 @@ export default function App() {
       {warnings.length > 0 && <button className="warning-link" onClick={() => setShowWarnings(true)}><CircleAlert size={12} />{warnings.length} notices</button>}</div>
       <span>{root ? `${(totalBytes / 1024 ** 3).toFixed(2)} GB on disk` : 'JPG · PNG · WebP · GIF · AVIF · TIFF · SVG'}<i />{root ? `${view === 'folders' ? 'Folder groups' : view === 'list' ? 'Details' : view === 'compact' ? 'Compact' : 'Gallery'} view` : 'Files stay on your computer'}</span>
     </footer>
-    {viewer && current && <Viewer item={current} index={selectedIndex} count={filtered.length} onClose={closeViewer} onPrevious={() => navigate(-1)} onNext={() => navigate(1)} onMessage={setToast} />}
+    {viewer && current && <Viewer items={filtered} index={selectedIndex} onClose={closeViewer} onPrevious={() => navigate(-1)} onNext={() => navigate(1)} onMessage={setToast} />}
     {contextMenu && <ImageContextMenu item={contextMenu.item} x={contextMenu.x} y={contextMenu.y} onClose={() => setContextMenu(null)}
       onOpen={() => { setSelected(contextMenu.item.id); setViewer(true); }} onBrowse={() => chooseFolder(contextMenu.item.folder)}
       onExcludeDirect={() => setDirectImages(contextMenu.item.folder, false)} onExcludeBranch={() => setFolderBranch(contextMenu.item.folder, false)} onMessage={setToast} />}
