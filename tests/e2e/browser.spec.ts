@@ -1,5 +1,6 @@
 import { test, expect, _electron as electron, type ElectronApplication, type Page } from '@playwright/test';
 import fs from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import sharp from 'sharp';
 
@@ -7,6 +8,7 @@ const workspace = process.cwd();
 const data = path.join(workspace, '.test-data');
 const library = path.join(data, 'Library #日本語');
 let app: ElectronApplication, page: Page;
+let profile: string | undefined;
 const errors: string[] = [];
 
 test.beforeAll(async () => {
@@ -26,12 +28,16 @@ test.beforeAll(async () => {
   await Promise.all(Array.from({ length: 1600 }, (_, i) => fs.writeFile(path.join(library, 'Textures', `Texture ${String(i).padStart(4, '0')}.png`), tile)));
   await fs.writeFile(path.join(library, 'broken.png'), 'broken image');
   await sharp(tile).tiff().toFile(path.join(library, 'transparent.tiff'));
-  app = await electron.launch({ args: ['.', `--folder=${library}`], cwd: workspace, env: { ...process.env, LUMEN_TEST_DATA: path.join(data, 'profile') } });
+  profile = await fs.mkdtemp(path.join(os.tmpdir(), 'lumen-browser-'));
+  app = await electron.launch({ args: ['.', `--folder=${library}`], cwd: workspace, env: { ...process.env, LUMEN_TEST_DATA: profile } });
   page = await app.firstWindow();
   page.on('pageerror', error => errors.push(error.message));
   await expect(page.getByText('1,642 images indexed', { exact: false })).toBeVisible();
 });
-test.afterAll(async () => { await app?.close(); });
+test.afterAll(async () => {
+  await app?.close();
+  if (profile) await fs.rm(profile, { recursive: true, force: true, maxRetries: 3 });
+});
 
 test('virtual gallery, folder filtering, breadcrumbs, all views, and search', async () => {
   await page.getByRole('button', { name: 'Gallery view', exact: true }).click();
