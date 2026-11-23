@@ -76,45 +76,65 @@ test('virtual gallery, folder filtering, breadcrumbs, all views, and search', as
   await page.getByRole('combobox', { name: 'Filter file type' }).selectOption('all');
 });
 
-test('a cold scroll jump loads the new viewport before lazy offscreen thumbnails', async () => {
+test('rapid scroll jumps cancel stale requests and load the new viewport ahead of queued thumbnails', async () => {
   await page.getByRole('button', { name: 'Details view', exact: true }).click();
   await page.getByRole('combobox', { name: 'Sort images' }).selectOption('name');
   const ascending = page.getByRole('button', { name: 'Sort ascending', exact: true });
   if (await ascending.isVisible()) await ascending.click();
-  await page.locator('.tree-label').filter({ hasText: 'Textures' }).click();
-  const thumb = (index: number) => page.getByRole('button', { name: `View Textures/Texture ${String(index).padStart(4, '0')}.png`, exact: true }).locator('img');
-  await expect(thumb(0)).toHaveJSProperty('naturalWidth', 60);
+  await page.locator('.tree-label').filter({ hasText: 'Landscapes' }).click();
   const { snapshot } = await page.evaluate(() => window.lumen.getState());
-  const indices = new Map(snapshot!.items.map(item => [item.id, Number(/^Texture (\d+)\.png$/.exec(item.name)?.[1])]));
-  const requests: number[] = [];
-  const record = (request: import('@playwright/test').Request) => {
-    const url = request.url();
-    if (url.startsWith('lumen://thumb/')) {
-      const index = indices.get(url.split('/').at(-1)!);
-      if (index !== undefined && index >= 700) requests.push(index);
-    }
-  };
-  page.on('request', record);
+  const indices = snapshot!.items.flatMap(item => {
+    const match = /^Texture (\d+)\.png$/.exec(item.name);
+    return match ? [[item.id, Number(match[1])] as const] : [];
+  });
+  await app.evaluate((_electron, indices) => {
+    const { ImageService } = process.mainModule!.require(process.cwd() + '/electron/images.cjs');
+    const names = new Map(indices);
+    const thumbnail = ImageService.prototype.thumbnail;
+    const starts: number[] = [];
+    const requests: number[] = [];
+    const release: (() => void)[] = [];
+    let holding = true;
+    ImageService.prototype.thumbnail = function (item, signal, foreground) {
+      const index = names.get(item.id);
+      if (index === undefined) return thumbnail.call(this, item, signal, foreground);
+      requests.push(index);
+      if (index >= 700) return thumbnail.call(this, item, signal, foreground);
+      return this.schedule(`probe-${item.id}`, async () => {
+        starts.push(index);
+        if (holding) await new Promise<void>(done => release.push(done));
+        return item.path;
+      }, signal, foreground);
+    };
+    Object.assign(globalThis, { thumbnailProbe: {
+      starts, requests,
+      releaseOne() { release.shift()?.(); },
+      restore() { holding = false; ImageService.prototype.thumbnail = thumbnail; release.forEach(done => done()); },
+    } });
+  }, indices);
+  const probe = () => app.evaluate(() => {
+    const { starts, requests } = (globalThis as any).thumbnailProbe;
+    return { starts, requests } as { starts: number[]; requests: number[] };
+  });
+  const scroll = (index: number) => page.locator('.library').evaluate((element, index) => { element.scrollTop = index * 74; }, index);
   try {
-    const offscreenLoading = await page.locator('.library').evaluate(element => new Promise(resolve => {
-      const observer = new MutationObserver(() => {
-        const offscreen = element.querySelector('[aria-label="View Textures/Texture 0797.png"]');
-        if (!offscreen) return;
-        observer.disconnect();
-        resolve(offscreen.querySelector('img')?.loading);
-      });
-      observer.observe(element, { childList: true, subtree: true });
-      element.scrollTop = 800 * 74;
-    }));
-    expect(offscreenLoading).toBe('lazy');
-    await expect(thumb(800)).toHaveJSProperty('naturalWidth', 60);
-    await expect(thumb(800)).toHaveAttribute('fetchpriority', 'high');
-    expect(requests[0]).toBe(800);
-    expect(requests.every(index => index >= 797 && index < 820)).toBe(true);
+    await page.locator('.tree-label').filter({ hasText: 'Textures' }).click();
+    await expect.poll(async () => (await probe()).starts.length).toBe(3);
+    await scroll(200);
+    await expect.poll(async () => (await probe()).starts).toContain(200);
+    for (const index of [400, 800]) {
+      await scroll(index);
+      await expect.poll(async () => (await probe()).requests).toContain(index);
+    }
+    expect((await probe()).requests.find(index => index >= 700)).toBe(800);
+    await app.evaluate(() => (globalThis as any).thumbnailProbe.releaseOne());
+    const first = page.getByRole('button', { name: 'View Textures/Texture 0800.png', exact: true }).locator('img');
+    await expect(first).toHaveJSProperty('naturalWidth', 60);
+    expect((await probe()).starts).toEqual([0, 1, 2, 200]);
     expect(await page.locator('.image-card').count()).toBeLessThan(20);
   } finally {
-    page.off('request', record);
     await page.locator('.all-images').click();
+    await app.evaluate(() => { (globalThis as any).thumbnailProbe.restore(); delete (globalThis as any).thumbnailProbe; });
     await page.getByRole('button', { name: 'Gallery view', exact: true }).click();
   }
 });
@@ -169,6 +189,7 @@ test('comma-separated folder include and exclude fields combine, survive refresh
   await expect(include).toHaveValue('Landscapes, Empty');
   await expect(exclude).toHaveValue(' **/Mountains, Textures ');
   await expect(page.locator('h1')).toContainText('All images20');
+  await expect.poll(() => page.locator('.thumb img').first().evaluate(img => (img as HTMLImageElement).naturalWidth)).toBeGreaterThan(0);
   await page.getByRole('button', { name: 'Collapse controls', exact: true }).click();
   await expect(page.locator('.condensed-filters')).toHaveAttribute('title', /Include folders: Landscapes, Empty/);
   await page.getByRole('button', { name: 'Expand controls', exact: true }).click();

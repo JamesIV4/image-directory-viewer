@@ -6,6 +6,7 @@ contextBridge.exposeInMainWorld('lumen', {
   openFolder: path => ipcRenderer.invoke('library:open', path),
   rescan: () => ipcRenderer.invoke('library:rescan'),
   cancel: () => ipcRenderer.invoke('library:cancel'),
+  retainThumbnailRequests: (through, active) => ipcRenderer.send('thumbnail:retain', through, active),
   metadata: id => ipcRenderer.invoke('image:metadata', id),
   reveal: id => ipcRenderer.invoke('image:reveal', id),
   copyPath: id => ipcRenderer.invoke('image:copy', id),

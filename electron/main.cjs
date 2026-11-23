@@ -103,22 +103,51 @@ app.whenReady().then(async () => {
     sharingEnabled = active === true; await saveRecent();
     return status;
   });
+  // Aborting a renderer fetch does not reliably abort its custom-protocol handler.
+  // Keep a watermark so a canceled request also stays canceled if it arrives late.
+  let thumbnailWatermark = 0, retainedThumbnails = new Set();
+  const thumbnailRequests = new Map();
+  ipcMain.on('thumbnail:retain', (event, through, active) => {
+    if (event.sender !== window?.webContents || !Number.isSafeInteger(through) || through < thumbnailWatermark
+      || !Array.isArray(active) || active.length > 4 || !active.every(id => Number.isSafeInteger(id) && id > 0 && id <= through)) return;
+    thumbnailWatermark = through;
+    retainedThumbnails = new Set(active);
+    for (const [id, controller] of thumbnailRequests) {
+      if (id <= through && !retainedThumbnails.has(id)) controller.abort();
+    }
+    service.drain();
+  });
+  const resetThumbnailRequests = () => {
+    for (const controller of thumbnailRequests.values()) controller.abort();
+    thumbnailRequests.clear();
+    retainedThumbnails.clear();
+    thumbnailWatermark = 0;
+    service.drain();
+  };
   protocol.handle('lumen', async request => {
     const url = new URL(request.url), id = url.pathname.slice(1);
     const cors = { 'Access-Control-Allow-Origin': dev ? 'http://127.0.0.1:5173' : 'null' };
+    const ticket = url.hostname === 'thumb' ? Number(url.searchParams.get('request')) : 0;
+    const tracked = Number.isSafeInteger(ticket) && ticket > 0;
+    if (tracked && ticket <= thumbnailWatermark && !retainedThumbnails.has(ticket)) return new Response(null, { status: 410, headers: cors });
+    const controller = tracked ? new AbortController() : null;
+    if (controller) thumbnailRequests.set(ticket, controller);
+    const signal = controller?.signal ?? request.signal;
     try {
       const item = indexed(id);
       await beforeImages();
-      const file = url.hostname === 'thumb' ? await service.thumbnail(item, request.signal)
-        : url.hostname === 'image' ? await service.full(item, request.signal) : null;
+      signal.throwIfAborted();
+      const file = url.hostname === 'thumb' ? await service.thumbnail(item, signal, url.searchParams.get('priority') !== 'nearby')
+        : url.hostname === 'image' ? await service.full(item, signal) : null;
       if (!file) return new Response('Unknown resource', { status: 404 });
-      const response = await net.fetch(pathToFileURL(file).toString(), { signal: request.signal });
-      if (url.hostname !== 'image') return response;
+      const response = await net.fetch(pathToFileURL(file).toString(), { signal });
       const headers = new Headers(response.headers);
       headers.set('Access-Control-Allow-Origin', cors['Access-Control-Allow-Origin']);
       return new Response(response.body, { status: response.status, headers });
     } catch {
       return new Response('Image unavailable or unsupported', { status: 404, headers: cors });
+    } finally {
+      if (controller && thumbnailRequests.get(ticket) === controller) thumbnailRequests.delete(ticket);
     }
   });
   ipcMain.handle('library:state', libraryState);
@@ -166,6 +195,10 @@ app.whenReady().then(async () => {
     }
   });
   window.webContents.on('will-navigate', event => event.preventDefault());
+  window.webContents.on('did-start-navigation', ({ isMainFrame, isSameDocument }) => {
+    if (isMainFrame && !isSameDocument) resetThumbnailRequests();
+  });
+  window.webContents.on('render-process-gone', resetThumbnailRequests);
   window.webContents.session.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
   window.once('ready-to-show', () => {
     if (decoding) return;

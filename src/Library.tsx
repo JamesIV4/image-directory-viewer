@@ -1,15 +1,19 @@
-import { useEffect, useEffectEvent, useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react';
+import { useCallback, useEffect, useEffectEvent, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type RefObject } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { ChevronDown, ChevronRight, Folder as FolderIcon, ImageOff } from 'lucide-react';
-import { bytes, thumbnail, type ImageItem, type Folder } from './types';
+import { bytes, type ImageItem, type Folder } from './types';
 import { folderIncluded, type FolderRules } from './folder-filter';
+import { ViewportThumbnails } from './viewport-thumbnails';
 
 export type View = 'grid' | 'compact' | 'list' | 'folders';
-function Thumb({ item, visible }: { item: ImageItem; visible: boolean }) {
+function Thumb({ item, thumbnails }: { item: ImageItem; thumbnails: ViewportThumbnails }) {
+  const subscribe = useCallback((listener: () => void) => thumbnails.subscribe(item.id, listener), [thumbnails, item.id]);
+  const read = useCallback(() => thumbnails.get(item.id), [thumbnails, item.id]);
+  const url = useSyncExternalStore(subscribe, read);
   const [failed, setFailed] = useState(false);
-  return failed ? <div className="failed-thumb"><ImageOff size={25} /><span>Preview unavailable</span></div> :
-    <img src={thumbnail(item)} alt={item.name} loading={visible ? 'eager' : 'lazy'} fetchPriority={visible ? 'high' : 'low'}
-      decoding="async" draggable={false} onError={() => setFailed(true)} />;
+  if (url === undefined) return null;
+  return !url || failed ? <div className="failed-thumb"><ImageOff size={25} /><span>Preview unavailable</span></div> :
+    <img src={url} alt={item.name} decoding="async" draggable={false} onError={() => setFailed(true)} />;
 }
 
 function FolderCheck({ folder, rules, counts, patternIncluded, onChange }: {
@@ -93,7 +97,9 @@ export default function Library({ items, view, size, selected, viewerOpen, scrol
   onContextMenu: (item: ImageItem, x: number, y: number) => void;
 }) {
   const [width, setWidth] = useState(900);
+  const [thumbnails] = useState(() => new ViewportThumbnails());
   const listHeading = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => () => thumbnails.clear(), [thumbnails]);
   useEffect(() => {
     const observer = new ResizeObserver(entries => setWidth(entries[0].contentRect.width));
     if (scroller.current) observer.observe(scroller.current);
@@ -134,14 +140,27 @@ export default function Library({ items, view, size, selected, viewerOpen, scrol
   const headingSpace = heading ? heading.offsetHeight + parseFloat(getComputedStyle(heading).marginBottom) : 0;
   const bottom = top + (virtual.scrollRect?.height ?? 0) - headingSpace;
   const rowGap = view === 'list' ? 6 : 16;
+  const rows = virtualRows.map(virtualRow => {
+    const start = virtualRow.index * columns;
+    const row: Row = groupedRows?.[virtualRow.index] ?? { type: 'images', items: items.slice(start, start + columns) };
+    return { virtualRow, row, visible: virtualRow.start < bottom && virtualRow.end - rowGap > top };
+  });
+  useLayoutEffect(() => {
+    if (viewerOpen) { thumbnails.pause(); return; }
+    const visible: ImageItem[] = [], below: ImageItem[] = [], above: ImageItem[][] = [];
+    for (const { row, visible: inView, virtualRow } of rows) {
+      if (row.type !== 'images') continue;
+      if (inView) visible.push(...row.items);
+      else if (virtualRow.start >= bottom) below.push(...row.items);
+      else above.push(row.items);
+    }
+    thumbnails.show(visible, [...below, ...above.reverse().flat()]);
+  });
 
   return <div className={`library ${view}`} ref={scroller} tabIndex={-1} role="region" aria-label="Image collection">
     {view === 'list' && <div ref={listHeading} className="list-heading"><span>Image / name</span><span>Folder</span><span>File size</span><span>Modified</span></div>}
     <div style={{ height: virtual.getTotalSize(), position: 'relative' }}>
-      {virtualRows.map(virtualRow => {
-        const start = virtualRow.index * columns;
-        const row: Row = groupedRows?.[virtualRow.index] ?? { type: 'images', items: items.slice(start, start + columns) };
-        const visible = virtualRow.start < bottom && virtualRow.end - rowGap > top;
+      {rows.map(({ virtualRow, row }) => {
         return <div key={virtualRow.key} className="image-row" style={{ transform: `translateY(${virtualRow.start}px)`, height: virtualRow.size, gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` }}>
           {row.type === 'folder' ? <button className="group-heading" onClick={() => onFolder(row.folder)} title={`Browse ${row.folder || 'root folder'}`}>
             <FolderIcon size={17} /><strong>{row.folder || 'Root folder'}</strong><span>{row.count.toLocaleString()} images</span><ChevronRight size={16} />
@@ -149,7 +168,7 @@ export default function Library({ items, view, size, selected, viewerOpen, scrol
             aria-label={`View ${item.relativePath}`} title={item.relativePath} onFocus={() => onSelect(item.id)} onClick={() => { onSelect(item.id); onOpen(item); }}
             onContextMenu={event => { event.preventDefault(); const rect = event.currentTarget.getBoundingClientRect(); onContextMenu(item, event.clientX || rect.left + 20, event.clientY || rect.top + 20); }}
             onKeyDown={event => { if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) { event.preventDefault(); const rect = event.currentTarget.getBoundingClientRect(); onContextMenu(item, rect.left + 20, rect.top + 20); } }}>
-            <div className="thumb"><Thumb item={item} visible={visible} /><span className="format-badge">{item.extension.toUpperCase()}</span></div>
+            <div className="thumb"><Thumb item={item} thumbnails={thumbnails} /><span className="format-badge">{item.extension.toUpperCase()}</span></div>
             <div className="card-caption"><strong>{item.name}</strong><span>{view === 'list' ? item.extension.toUpperCase() : item.folder || 'Root folder'}</span></div>
             {view === 'list' && <><span className="list-folder">{item.folder || 'Root folder'}</span><span className="list-size">{bytes(item.size)}</span><span className="list-date">{new Date(item.modified).toLocaleDateString()}</span></>}
           </button>)}

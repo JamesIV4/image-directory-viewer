@@ -23,16 +23,17 @@ const bmpWork = data => new Promise((resolve, reject) => {
 class ImageService {
   constructor(cacheDir, parallel = 4) {
     this.cacheDir = cacheDir; this.parallel = parallel;
-    this.running = 0; this.queue = []; this.inflight = new Map();
+    this.running = 0; this.background = 0; this.queue = []; this.inflight = new Map();
   }
-  schedule(key, work, signal) {
+  schedule(key, work, signal, foreground = true) {
     signal?.throwIfAborted();
     let task = this.inflight.get(key);
     if (task) {
-      task.signals.add(signal);
+      task.readers.set(signal, foreground || task.readers.get(signal) === true);
+      this.drain();
       return task.result;
     }
-    task = { key, work, signals: new Set([signal]) };
+    task = { key, work, readers: new Map([[signal, foreground]]) };
     task.result = new Promise((resolve, reject) => Object.assign(task, { resolve, reject }));
     this.inflight.set(key, task);
     this.queue.push(task);
@@ -40,42 +41,54 @@ class ImageService {
     return task.result;
   }
   drain() {
+    this.queue = this.queue.filter(task => {
+      if ([...task.readers.keys()].some(signal => !signal?.aborted)) return true;
+      this.inflight.delete(task.key);
+      task.reject(new Error('Request canceled'));
+      return false;
+    });
     while (this.running < this.parallel && this.queue.length) {
-      const task = this.queue.shift();
-      if ([...task.signals].every(signal => signal?.aborted)) {
-        this.inflight.delete(task.key);
-        task.reject(new Error('Request canceled'));
-        continue;
-      }
+      const next = this.queue.findIndex(task => [...task.readers].some(([signal, foreground]) => foreground && !signal?.aborted));
+      const background = next < 0;
+      // Keep a decoder slot available for the visible viewport and detail images.
+      if (background && this.background >= Math.max(1, this.parallel - 1)) break;
+      const [task] = this.queue.splice(background ? 0 : next, 1);
+      if (background) this.background++;
       this.running++;
       Promise.resolve().then(task.work).then(task.resolve, task.reject).finally(() => {
-        this.inflight.delete(task.key); this.running--; this.drain();
+        this.inflight.delete(task.key);
+        this.running--;
+        if (background) this.background--;
+        this.drain();
       });
     }
   }
-  async thumbnail(item, signal) {
+  async thumbnail(item, signal, foreground) {
     return this.cached(item, 'thumb', 'webp', async destination => {
       if (item.extension === 'bmp') { await bmpWork({ path: item.path, destination, mode: 'thumbnail' }); return; }
       await sharp(item.path, inputOptions).autoOrient().resize(640, 640, { fit: 'inside', withoutEnlargement: true }).webp({ quality: 78 }).toFile(destination);
-    }, signal);
+    }, signal, foreground);
   }
   async full(item, signal) {
     // Chromium displays these directly, retaining GIF/WebP animation and original detail.
     if (!['tif', 'tiff', 'svg', 'heic', 'heif'].includes(item.extension)) return item.path;
     return this.cached(item, 'full', 'png', destination => sharp(item.path, inputOptions).autoOrient().png().toFile(destination), signal);
   }
-  cached(item, kind, extension, generate, signal) {
+  async cached(item, kind, extension, generate, signal, foreground) {
     const key = `${item.id}-${kind}`;
+    const dir = path.join(this.cacheDir, item.id.slice(0, 2));
+    const destination = path.join(dir, `${key}.${extension}`);
+    // Cached files can be served even while every decoder is busy.
+    signal?.throwIfAborted();
+    if (await fs.access(destination).then(() => true, () => false)) return destination;
     return this.schedule(key, async () => {
-      const dir = path.join(this.cacheDir, item.id.slice(0, 2));
-      const destination = path.join(dir, `${key}.${extension}`);
       try { await fs.access(destination); return destination; } catch { /* cache miss */ }
       await fs.mkdir(dir, { recursive: true });
       const temporary = `${destination}.${Date.now()}.tmp`;
       try { await generate(temporary); await fs.rename(temporary, destination); }
       catch (error) { await fs.unlink(temporary).catch(() => {}); throw error; }
       return destination;
-    }, signal);
+    }, signal, foreground);
   }
   metadata(item) {
     return this.schedule(`${item.id}-metadata`, async () => {

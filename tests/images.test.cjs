@@ -107,6 +107,26 @@ test('canceled thumbnail requests skip queued work unless the thumbnail still ha
   assert.equal(await secondReader, 'thumbnail');
 });
 
+test('visible requests get the reserved decoder slot and take priority over nearby work', async () => {
+  const service = new ImageService('', 2);
+  const started = [];
+  let freeNearby, freeVisible;
+  const nearbyGate = new Promise(resolve => { freeNearby = resolve; });
+  const visibleGate = new Promise(resolve => { freeVisible = resolve; });
+  const nearby = service.schedule('nearby', () => nearbyGate, undefined, false);
+  const waitingNearby = service.schedule('waiting-nearby', () => started.push('nearby'), undefined, false);
+  const visible = service.schedule('visible', () => { started.push('visible'); return visibleGate; });
+  const waitingVisible = service.schedule('waiting-visible', () => started.push('next visible'));
+  await Promise.resolve();
+  assert.deepEqual(started, ['visible']);
+  freeVisible();
+  await waitingVisible;
+  assert.deepEqual(started, ['visible', 'next visible']);
+  freeNearby();
+  await Promise.all([nearby, visible, waitingNearby]);
+  assert.deepEqual(started, ['visible', 'next visible', 'nearby']);
+});
+
 test('BMP package runs off-thread with accurate colors and metadata', async t => {
   const bmp = require('bmp-js');
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'lumen-bmp-'));

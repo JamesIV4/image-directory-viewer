@@ -19,6 +19,7 @@ declare global {
     lumen: {
       remote?: { base: string; disconnect(): void };
       mediaUrl?(kind: 'thumb' | 'image', id: string): string;
+      retainThumbnailRequests?(through: number, active: number[]): void;
       sharingState(): Promise<{ active: boolean; token: string; addresses: string[] }>;
       setSharing(active: boolean): Promise<{ active: boolean; token: string; addresses: string[] }>;
       getState(): Promise<{ root: string; recent: string[]; scanning: boolean; snapshot: Snapshot | null; generation: number; manualRefresh?: boolean }>;
